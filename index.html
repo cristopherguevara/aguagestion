@@ -120,8 +120,16 @@ table.tabla{width:100%;border-collapse:collapse;font-size:.9rem}
 .prods{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
 .prod{border:2px solid var(--borde);border-radius:14px;overflow:hidden;background:#fff}
 .prod.on{border-color:var(--azul);background:var(--agua)}
-.prod .pn{padding:10px;cursor:pointer;min-height:66px}
+.prod .pn{padding:10px;cursor:pointer;min-height:66px;border-left:6px solid var(--borde)}
 .prod .pn b{display:block;line-height:1.15} .prod .pn small{color:var(--azul2);font-weight:700}
+.prod[data-cat="agua"] .pn{border-left-color:#0b6e79;background:#eaf7f8}
+.prod[data-cat="garrafon"] .pn{border-left-color:#084c54;background:#e6f2f3}
+.prod[data-cat="hielo"] .pn{border-left-color:#2f9bd6;background:#eaf5fc}
+.prod[data-cat="bolsipura"] .pn{border-left-color:#f2a541;background:#fef6e9}
+.prod[data-cat="dispensador"] .pn{border-left-color:#2a8f62;background:#eaf7f0}
+.prod[data-cat="otro"] .pn{border-left-color:#8a97a0;background:#f2f4f5}
+.prod.on .pn{background:transparent}
+.cat-ico{font-size:1.15rem;margin-right:4px}
 .stp{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--borde)}
 .stp button{width:52px;height:48px;border:0;background:transparent;font-size:1.5rem;font-weight:800;color:var(--azul);cursor:pointer}
 .stp span{font-size:1.2rem;font-weight:800}
@@ -205,8 +213,8 @@ details.ayuda summary{cursor:pointer;font-weight:700;color:var(--azul2)}
    ===================================================================== */
 
 // ---------- CONFIGURACIÓN (cambia estas dos líneas) ----------
-const SUPABASE_URL      = 'https://gacualjiiudcbucwfecs.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhY3VhbGppaXVkY2J1Y3dmZWNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1NTgwNDgsImV4cCI6MjEwNjEzNDA0OH0.iny-tAjEA7iEt0qey8J_6Lw0sEeR7Gg91glcqG_pNp4';
+const SUPABASE_URL      = 'https://TU-PROYECTO.supabase.co';
+const SUPABASE_ANON_KEY = 'TU-ANON-KEY-PUBLICA';
 const ZONA      = 'America/Guatemala';
 const CACHE_MIN = 5;                     // minutos entre refrescos de la caché de clientes
 
@@ -367,11 +375,12 @@ async function ir(v){
 /* ---------------------------------------------------------------------
    CACHÉ DE DATOS BASE (localStorage) – buscador instantáneo y modo offline
    --------------------------------------------------------------------- */
-const COLS_CLIENTE = 'id,nombre,direccion_corta,direccion_completa,telefono,zona,ruta_id,dia_semana,lat,lng,maps_link,foto_url,garrafones_prestados,ultima_compra,estado,frecuencia,promedio_q,notas';
+const COLS_CLIENTE = 'id,nombre,direccion_corta,direccion_completa,telefono,zona,ruta_id,dia_semana,lat,lng,maps_link,foto_url,garrafones_prestados,nit,ultima_compra,estado,frecuencia,promedio_q,notas';
 
 function aplicarBase(b){
   S.base = b;
   S.productos = b.productos; S.precios = b.precios; S.rutas = b.rutas; S.usuarios = b.usuarios; S.cats = b.cats; S.clientes = b.clientes;
+  S.negocio = (b.negocio && b.negocio[0]) || {};
   S.pc = {}; (b.pcs || []).forEach(x => S.pc[x.cliente_id + '|' + x.producto_id] = x.precio_especial);
   S.cmap = {};
   S.clientes.forEach(c => {
@@ -387,12 +396,13 @@ async function cargarBase(forzar){
   if(!navigator.onLine){ if(cache) aplicarBase(cache); return; }
   try{
     const g = (t, c, o) => sb.from(t).select(c).order(o).then(r => { if(r.error) throw r.error; return r.data; });
-    const [productos, precios, pcs, rutas, usuarios, cats, clientes] = await Promise.all([
+    const [productos, precios, pcs, rutas, usuarios, cats, clientes, negocio] = await Promise.all([
       g('productos','*','nombre'), g('precios','*','vigente_desde'), g('precios_cliente','*','cliente_id'),
       g('rutas','*','nombre'), g('usuarios_perfil','*','nombre'), g('categorias_egreso','*','nombre'),
-      paginar(() => sb.from('clientes').select(COLS_CLIENTE).order('direccion_corta'))
+      paginar(() => sb.from('clientes').select(COLS_CLIENTE).order('direccion_corta')),
+      sb.from('negocio_config').select('*').then(r => r.error ? [] : r.data)
     ]);
-    const base = {productos, precios, pcs, rutas, usuarios, cats, clientes};
+    const base = {productos, precios, pcs, rutas, usuarios, cats, clientes, negocio};
     ls.set('base', base); ls.set('meta', {t:Date.now()}); aplicarBase(base);
   }catch(e){
     console.warn('No se pudo refrescar la caché', e);
@@ -522,7 +532,8 @@ function vCli(){
   if(c){
     box.innerHTML = `<div class="card dest" style="margin:8px 0">
       <b>${esc(c.direccion_corta)}</b> · ${esc(c.nombre)}<br>
-      <small>🛢️ Prestados: <b>${c.garrafones_prestados||0}</b> · Último pedido: ${haceTxt(c.ultima_compra)} ${c.telefono ? '· ☎ '+esc(c.telefono) : ''}</small>
+      <small>🛢️ Prestados: <b>${c.garrafones_prestados||0}</b> · Último pedido: ${haceTxt(c.ultima_compra)} ${c.telefono ? '· ☎ '+esc(c.telefono) : ''}</small><br>
+      <small>${c.nit ? `🧾 NIT: <b>${esc(c.nit)}</b>` : `<button class="btn mini sec" onclick="agregarNitRapido()">+ Agregar NIT (para factura)</button>`}</small>
       <div class="fila-btn"><button class="btn ambar" onclick="vRepetir()">🔁 Repetir último pedido</button>
       <button class="btn sec" onclick="V.cliente=null;vTodo()">Cambiar cliente</button></div></div>`;
   } else {
@@ -546,6 +557,13 @@ async function vRepetir(){
   if(!cart){ toast('Este cliente aún no tiene pedidos anteriores', 'warn'); return; }
   V.cart = cart; vProd(); vTot(); toast('Pedido anterior cargado');
 }
+async function agregarNitRapido(){
+  if(!navigator.onLine) return toast('Guardar el NIT requiere internet', 'warn');
+  const v = (prompt('NIT del cliente (para el comprobante):', V.cliente.nit || '') || '').trim();
+  const {error} = await sb.from('clientes').update({nit: v || null}).eq('id', V.cliente.id);
+  if(error) return toast(errMsg(error), 'err');
+  V.cliente.nit = v || null; tocarClienteLocal(V.cliente.id, {nit: v || null}); vCli(); toast('NIT guardado ✔');
+}
 function vTipo(){
   const b = $('#v-tipo');
   if(S.rol === 'repartidor'){ b.innerHTML = ''; return; }
@@ -553,12 +571,13 @@ function vTipo(){
     <button class="${V.tipo==='tienda'?'on':''}" onclick="V.tipo='tienda';vProd();vTipo();vTot()">🏪 Tienda</button>
     <button class="${V.tipo==='domicilio'?'on':''}" onclick="V.tipo='domicilio';vProd();vTipo();vTot()">🛵 Domicilio</button></div>`;
 }
+const ICONO_CAT = {agua:'💧', garrafon:'🛢️', hielo:'🧊', bolsipura:'🧂', dispensador:'🚰', otro:'📦'};
 function vProd(){
   const orden = {agua:0, garrafon:1, hielo:2, bolsipura:3};
   const lista = S.productos.filter(p => p.activo).sort((a,b) => (orden[a.categoria] ?? 9) - (orden[b.categoria] ?? 9) || a.nombre.localeCompare(b.nombre, 'es', {numeric:true}));
   $('#v-prod').innerHTML = `<div class="prods">` + lista.map(p => {
-    const q = V.cart[p.id] || 0, pr = precioDe(p.id, V.cliente && V.cliente.id, V.tipo);
-    return `<div class="prod ${q?'on':''}"><div class="pn" onclick="vMas('${p.id}',1)"><b>${esc(p.nombre)}</b><small>${Q(pr)}</small></div>
+    const q = V.cart[p.id] || 0, pr = precioDe(p.id, V.cliente && V.cliente.id, V.tipo), ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro;
+    return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn" onclick="vMas('${p.id}',1)"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b><small>${Q(pr)}</small></div>
       <div class="stp"><button onclick="vMas('${p.id}',-1)" aria-label="Quitar">−</button><span>${q}</span><button onclick="vMas('${p.id}',1)" aria-label="Sumar">＋</button></div></div>`;
   }).join('') + `</div>`;
 }
@@ -589,6 +608,48 @@ function vTot(){
     <p class="peq" style="text-align:center;margin:0 0 8px">${n} producto(s)</p>
     <button class="btn grande verde" id="v-guardar" onclick="guardarVenta()">✔ Guardar venta</button>`;
 }
+/* ---------------------------------------------------------------------
+   COMPROBANTE IMPRESO (impresora térmica, 80mm)
+   Se ofrece solo cuando el cliente tiene NIT guardado. Abre una ventana
+   aparte con su propio diseño angosto y llama a imprimir(); el sistema
+   operativo deja elegir ahí la impresora térmica.
+   --------------------------------------------------------------------- */
+const FORMA_TXT = {efectivo:'Efectivo', transferencia:'Transferencia', credito:'Crédito'};
+function imprimirComprobante(venta, items, cliente){
+  const w = window.open('', '_blank', 'width=380,height=640');
+  if(!w){ toast('El navegador bloqueó la ventana del comprobante. Permite ventanas emergentes para poder imprimir.', 'warn'); return; }
+  const biz = S.negocio || {}, ruta = S.rutas.find(r => r.id === cliente.ruta_id);
+  const filas = items.map(i => `<tr><td>${+i.cantidad} ${esc(nomProd(i.producto_id))}</td><td style="text-align:right">${Q(i.subtotal_q)}</td></tr>`).join('');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Comprobante</title><style>
+    @page{margin:0} *{box-sizing:border-box}
+    body{font-family:'Courier New',Courier,monospace;width:72mm;margin:0 auto;padding:8px;font-size:12px;color:#000;line-height:1.35}
+    h1{font-size:15px;text-align:center;margin:2px 0} .c{text-align:center;margin:2px 0}
+    table{width:100%;border-collapse:collapse;margin-top:6px} td{padding:2px 0;vertical-align:top}
+    hr{border:none;border-top:1px dashed #000;margin:8px 0}
+    .tot{font-size:15px;font-weight:bold;text-align:right;margin-top:4px}
+    @media print{ .no-print{display:none} }
+  </style></head><body>
+    <h1>${esc(biz.nombre || 'Comprobante de venta')}</h1>
+    ${biz.nit ? `<p class="c">NIT: ${esc(biz.nit)}</p>` : ''}
+    ${biz.direccion ? `<p class="c">${esc(biz.direccion)}</p>` : ''}
+    ${biz.telefono ? `<p class="c">Tel: ${esc(biz.telefono)}</p>` : ''}
+    <hr>
+    <p>Fecha: ${fmtFecha(venta.fecha)} ${new Date().toLocaleTimeString('es-GT',{hour:'2-digit',minute:'2-digit'})}<br>
+    Vendedor: ${esc((S.perfil||{}).nombre || '')}<br>
+    ${ruta ? 'Ruta: ' + esc(ruta.nombre) + '<br>' : ''}
+    Cliente: ${esc(cliente.nombre)}<br>
+    NIT: ${esc(cliente.nit || 'C/F')}<br>
+    Dirección: ${esc(cliente.direccion_completa || cliente.direccion_corta || '')}</p>
+    <hr><table>${filas}</table><hr>
+    <p class="tot">TOTAL: ${Q(venta.total_q)}</p>
+    <p>Forma de pago: ${FORMA_TXT[venta.forma_pago] || venta.forma_pago}</p>
+    <hr><p class="c">¡Gracias por su compra!</p>
+    <p class="no-print c"><button onclick="window.print()" style="padding:8px 16px;font-size:14px">🖨 Imprimir</button></p>
+  </body></html>`);
+  w.document.close();
+  setTimeout(() => { try{ w.focus(); w.print(); }catch(e){} }, 250);
+}
+
 async function guardarVenta(){
   const btn = $('#v-guardar'); btn.disabled = true;
   const f = hoy(), vid = uuid(), cid = V.cliente ? V.cliente.id : null, items = [];
@@ -616,6 +677,7 @@ async function guardarVenta(){
     }
     cerrarModal();
     toast(r.cola ? 'Venta guardada sin conexión ⏳' : `Venta guardada ✔  ${Q(total)}`);
+    if(items.length && V.cliente && V.cliente.nit) imprimirComprobante(venta, items, V.cliente);
     if(S.vista === 'inicio') ir('inicio');
   }catch(e){ toast(errMsg(e), 'err'); btn.disabled = false; }
 }
@@ -732,7 +794,15 @@ async function confirmarRep(cierreId){
 async function dashRepartidor(){
   const f = hoy(), hoyDia = diaSem(f), me = S.user.id;
   if(!S.diaSel) S.diaSel = hoyDia;
-  let r = null; try{ r = await resumenDia(f, me); }catch(e){ if(!esRed(e)) throw e; }
+  let r = null, carga = []; try{ r = await resumenDia(f, me); }catch(e){ if(!esRed(e)) throw e; }
+  let vendidoHoy = {};
+  try{
+    if(navigator.onLine){
+      carga = await sb.from('cargas_ruta').select('*').eq('fecha', f).eq('repartidor_id', me).then(okR);
+      vendidoHoy = await ventaDetalleHoyPorUsuario(f).then(m => m[me] || {}).catch(() => ({}));
+    }
+  }catch(e){ if(!esRed(e)) throw e; }
+  const enCola = ventasEnColaHoy(me, f);
   const vis = new Set((r ? r.ventas : []).map(x => x.cliente_id));
   ls.get('cola', []).forEach(op => { if(op.k === 'venta' && op.venta.fecha === f) vis.add(op.venta.cliente_id); });
   S.visitados = vis; S.soloMiRuta = S.soloMiRuta || false;
@@ -747,6 +817,10 @@ async function dashRepartidor(){
         <div class="dc">${lst.length}</div><div class="de">≈ ${Q(est).replace('Q ','Q')}</div></button>`;
     }).join('')}</div>
     <div class="card" id="det-dia"></div>
+    ${carga.length ? `<div class="card"><h3>🚚 Lo que llevas hoy</h3>
+      <p class="peq">Disponible = lo que te cargaron menos lo que ya vendiste hoy${Object.keys(enCola).length ? ' (incluye ventas aún sin enviar)' : ''}.</p>
+      ${carga.map(c => { const v = (+vendidoHoy[c.producto_id]||0) + (+enCola[c.producto_id]||0), disp = r2(+c.cantidad - v);
+        return `<div style="display:flex;justify-content:space-between;padding:4px 0"><span>${ICONO_CAT[(S.productos.find(p=>p.id===c.producto_id)||{}).categoria] || ''} ${esc(nomProd(c.producto_id))}</span><b class="${disp<0?'neg':''}">${disp}</b></div>`; }).join('')}</div>` : ''}
     <div class="card"><h3>Mi día · ${fmtFecha(f)}</h3>
       ${r ? `<div class="grid"><div class="kpi"><small>Vendido</small><b>${Q(r.total)}</b></div><div class="kpi"><small>Efectivo esperado</small><b>${Q(r.esperado)}</b></div>
         <div class="kpi"><small>Gastos de ruta</small><b>${Q(r.gastos)}</b></div><div class="kpi"><small>Pedidos</small><b>${r.ventas.length}</b></div></div>` : '<p class="peq">Sin conexión: no puedo calcular el resumen, pero puedes seguir registrando pedidos.</p>'}
@@ -1006,10 +1080,11 @@ async function pintarBusqueda(){
    --------------------------------------------------------------------- */
 function formNuevoCliente(dir, cb, volver){
   S._ncCb = cb; S._ncVolver = volver || cerrarModal;
-  modal(`<div class="mh"><h2>Cliente nuevo</h2></div>
+  modal(`<div class="mh"><h2>Cliente nuevo</h2><button class="btn mini sec" onclick="S._ncVolver()">✕ Cerrar</button></div>
     <label>Nombre *</label><input id="nc-n" autocomplete="off">
     <label>Dirección corta * <small>(ej. 10 calle A 12-25)</small></label><input id="nc-d" value="${esc(dir||'')}" autocomplete="off">
     <label>Teléfono</label><input id="nc-t" inputmode="tel">
+    <label>NIT <small>(opcional, si pide factura)</small></label><input id="nc-nit" autocomplete="off">
     <label>Día de ruta</label><select id="nc-dia"><option value="">Sin día</option>${DIAS.map((d,i) => `<option value="${i+1}">${d}</option>`).join('')}</select>
     <label>Zona</label><input id="nc-z" placeholder="Zona 1, Mercado…">
     <div class="fila-btn"><button class="btn verde" onclick="guardarNuevoCliente()">Guardar cliente</button><button class="btn sec" onclick="S._ncVolver()">Cancelar</button></div>`);
@@ -1018,7 +1093,7 @@ async function guardarNuevoCliente(){
   const nombre = $('#nc-n').value.trim(), dir = $('#nc-d').value.trim();
   if(!nombre || !dir){ toast('Escribe el nombre y la dirección corta', 'warn'); return; }
   if(!navigator.onLine){ toast('Crear clientes requiere internet', 'warn'); return; }
-  const obj = {id:uuid(), nombre, direccion_corta:dir, telefono:$('#nc-t').value.trim() || null,
+  const obj = {id:uuid(), nombre, direccion_corta:dir, telefono:$('#nc-t').value.trim() || null, nit:$('#nc-nit').value.trim() || null,
                dia_semana:+$('#nc-dia').value || null, zona:$('#nc-z').value.trim() || null, estado:'activo'};
   const {data, error} = await sb.from('clientes').insert(obj).select(COLS_CLIENTE).single();
   if(error){ toast(error.code === '23505' ? 'Ya existe un cliente con esa dirección corta' : errMsg(error), 'err'); return; }
@@ -1133,6 +1208,8 @@ async function abrirFicha(cid){
     <div class="card"><h3>Datos básicos</h3>
       ${campo('Nombre','f-nombre',c.nombre)}${campo('Dirección corta','f-dcorta',c.direccion_corta)}${campo('Dirección completa','f-dcomp',c.direccion_completa)}
       ${campo('Teléfono','f-tel',c.telefono,'tel')}${campo('Zona','f-zona',c.zona)}
+      <label for="f-nit">NIT <small>(para generar comprobante con factura)</small></label>
+      <div style="display:flex;gap:8px"><input id="f-nit" value="${esc(c.nit||'')}" placeholder="Ej: 1234567-8 o CF" style="flex:1"><button class="btn" onclick="guardarNit()">Guardar</button></div>
       ${sup ? `<label for="f-ruta">Ruta</label><select id="f-ruta"><option value="">Sin ruta</option>${S.rutas.map(r => `<option value="${r.id}" ${c.ruta_id===r.id?'selected':''}>${esc(r.nombre)}</option>`).join('')}</select>
         <label for="f-dia">Día de la semana</label><select id="f-dia"><option value="">Sin día</option>${DIAS.map((d,i) => `<option value="${i+1}" ${c.dia_semana===i+1?'selected':''}>${d}</option>`).join('')}</select>
         <label for="f-estado">Estado</label><select id="f-estado">${['activo','inactivo'].map(x => `<option ${c.estado===x?'selected':''}>${x}</option>`).join('')}</select>`
@@ -1188,6 +1265,12 @@ async function guardarFicha(){
   const {error} = await sb.from('clientes').update(obj).eq('id', S.fc.id);
   if(error) return toast(errMsg(error), 'err');
   tocarClienteLocal(S.fc.id, obj); toast('Cliente actualizado ✔');
+}
+async function guardarNit(){
+  const v = $('#f-nit').value.trim();
+  const {error} = await sb.from('clientes').update({nit: v || null}).eq('id', S.fc.id);
+  if(error) return toast(errMsg(error), 'err');
+  S.fc.nit = v || null; tocarClienteLocal(S.fc.id, {nit: v || null}); toast('NIT guardado ✔');
 }
 async function guardarSaldoTambos(){
   const n = Math.max(0, parseInt($('#f-prest').value) || 0);
@@ -1534,10 +1617,11 @@ VISTAS.er = async () => {
   const h = hoy();
   const E = S.erSel = S.erSel || {anio:+h.slice(0,4), mes:+h.slice(5,7), per:(+h.slice(8,10) <= 15 ? 'q1' : 'q2')};
   const cols = [0, 1, 2].map(i => ({anio:E.anio - i, ...rangoER(E.anio - i, E.mes, E.per)}));
-  const [calc, guardados, gastos] = await Promise.all([
+  const [calc, guardados, gastos, costos] = await Promise.all([
     Promise.all(cols.map(c => rpc('calc_er', {p_desde:c.desde, p_hasta:c.hasta}))),
     sb.from('estado_resultados').select('*').order('fecha_inicio', {ascending:false}).limit(24).then(okR),
-    rpc('rpt_gastos', {p_desde:cols[0].desde, p_hasta:cols[0].hasta})
+    rpc('rpt_gastos', {p_desde:cols[0].desde, p_hasta:cols[0].hasta}),
+    rpc('rpt_costo_productos', {p_desde:cols[0].desde, p_hasta:cols[0].hasta}).catch(() => [])
   ]);
   const periodo = E.per === 'mes' ? 'mes' : 'quincena';
   cols.forEach((c, i) => {
@@ -1545,11 +1629,11 @@ VISTAS.er = async () => {
     c.saved = guardados.find(g => g.periodo === periodo && g.fecha_inicio === c.desde && g.fecha_fin === c.hasta) || null;
     c.otros = c.saved ? +c.saved.otros_ingresos_q : 0;
   });
-  S.erData = {E, cols, guardados, gastos, periodo};
+  S.erData = {E, cols, guardados, gastos, costos, periodo};
   pintarER();
 };
 function pintarER(){
-  const {E, cols, guardados, gastos, periodo} = S.erData, h = hoy();
+  const {E, cols, guardados, gastos, costos, periodo} = S.erData, h = hoy();
   const R = cols.map(c => armarER(c.calc, c.otros));
   const enCurso = cols[0].hasta >= h;
   const fila = (txt, k, opc = {}) => `<tr ${opc.tot ? 'style="font-weight:800;background:var(--espuma)"' : ''}><td>${txt}</td>${R.map(x => `<td class="n">${opc.pct ? x[k].toFixed(1) + ' %' : Q(x[k])}</td>`).join('')}
@@ -1588,6 +1672,12 @@ function pintarER(){
     <div class="card"><h3>Gastos del período por categoría</h3>
       ${gastos.length ? `<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Categoría</th><th>Tipo</th><th class="n">Q</th></tr></thead><tbody>
         ${gastos.map(g => `<tr><td>${esc(g.categoria)}</td><td>${g.es_fijo ? 'Fijo' : 'Variable / costo'}</td><td class="n">${Q(g.total_q)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="peq">Sin gastos registrados en este período.</p>'}
+    </div>
+    <div class="card"><h3>Costo y margen por producto</h3>
+      <p class="peq">Usa el “costo unitario” que escribas en <b>Precios</b>. Es informativo: no cambia el “Costo de ventas” de arriba, que sale de las categorías de gasto.</p>
+      ${costos.length ? `<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Producto</th><th class="n">Unidades</th><th class="n">Ingreso</th><th class="n">Costo unit.</th><th class="n">Costo total</th><th class="n">Margen</th></tr></thead><tbody>
+        ${costos.map(c => `<tr><td>${esc(c.producto)}</td><td class="n">${+c.unidades}</td><td class="n">${Q(c.ingreso_q)}</td><td class="n">${+c.costo_unitario > 0 ? Q(c.costo_unitario) : '<small>sin costo</small>'}</td><td class="n">${Q(c.costo_total_q)}</td><td class="n ${+c.margen_q<0?'neg':'pos'}">${Q(c.margen_q)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="peq">Sin ventas en este período, o aún no has escrito el costo unitario de tus productos en “Precios”.</p>'}
     </div>
     <div class="card no-print"><h3>Estados cerrados</h3>
       ${guardados.length ? `<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Período</th><th class="n">Ingresos</th><th class="n">Util. neta</th><th></th></tr></thead><tbody>
@@ -1743,19 +1833,68 @@ async function guardarTambos(){
    PRODUCCIÓN E INVENTARIO  (tienda y supervisor)
    Las ventas descuentan inventario solas (trigger en la base de datos).
    --------------------------------------------------------------------- */
+// Cuánto ha vendido cada repartidor hoy a domicilio, por producto (para saber qué le queda de su carga)
+async function ventaDetalleHoyPorUsuario(f){
+  const ventas = await sb.from('ventas').select('id,usuario_id').eq('fecha', f).eq('tipo','domicilio').then(okR);
+  if(!ventas.length) return {};
+  const idxUser = {}; ventas.forEach(v => idxUser[v.id] = v.usuario_id);
+  const det = await paginar(() => sb.from('venta_detalle').select('venta_id,producto_id,cantidad').in('venta_id', ventas.map(v => v.id)));
+  const out = {};
+  det.forEach(d => { const rep = idxUser[d.venta_id]; if(!rep) return; (out[rep] ||= {})[d.producto_id] = (out[rep][d.producto_id] || 0) + +d.cantidad; });
+  return out;
+}
+// Ventas del propio repartidor guardadas en el teléfono, aún sin enviar (para que su "disponible" no se atrase sin señal)
+function ventasEnColaHoy(uid, f){
+  const out = {};
+  ls.get('cola', []).forEach(op => {
+    if(op.k === 'venta' && op.venta.usuario_id === uid && op.venta.fecha === f && op.venta.tipo === 'domicilio'){
+      (op.detalle || []).forEach(d => out[d.producto_id] = (out[d.producto_id] || 0) + +d.cantidad);
+    }
+  });
+  return out;
+}
+let CR = {rep:null, cart:{}, porRep:{}};
 VISTAS.prod = async () => {
   if(!navigator.onLine) return soloEnLinea('🏭 Producción e inventario');
-  const [stock, prods, movs] = await Promise.all([
+  const [stock, prods, movs, cargasHoy, vendidoHoy] = await Promise.all([
     rpc('stock_actual'),
     sb.from('produccion').select('*').order('fecha', {ascending:false}).order('created_at', {ascending:false}).limit(10).then(okR),
-    sb.from('inventario_mov').select('*').or('motivo.is.null,motivo.neq.venta').order('created_at', {ascending:false}).limit(15).then(okR)
+    sb.from('inventario_mov').select('*').or('motivo.is.null,motivo.neq.venta').order('created_at', {ascending:false}).limit(15).then(okR),
+    sb.from('cargas_ruta').select('*').eq('fecha', hoy()).then(okR),
+    ventaDetalleHoyPorUsuario(hoy()).catch(() => ({}))
   ]);
   const invProd = S.productos.filter(p => p.activo && p.controla_inventario);
+  const reps = S.usuarios.filter(u => u.rol === 'repartidor' && u.activo);
+  CR.porRep = {}; cargasHoy.forEach(r => { (CR.porRep[r.repartidor_id] ||= {})[r.producto_id] = +r.cantidad; });
+  if(!CR.rep || !reps.some(r => r.id === CR.rep)) CR.rep = reps[0] ? reps[0].id : null;
+  CR.cart = {...(CR.porRep[CR.rep] || {})};
+  // Combina, por repartidor, lo cargado hoy con lo que ya vendió (aunque haya vendido algo que no estaba en la carga)
+  const filasResumen = [];
+  reps.forEach(u => {
+    const cargado = CR.porRep[u.id] || {}, vendido = vendidoHoy[u.id] || {};
+    const pids = new Set([...Object.keys(cargado), ...Object.keys(vendido)]);
+    pids.forEach(pid => { const c = cargado[pid] || 0, v = vendido[pid] || 0; if(c || v) filasResumen.push({rep:u, pid, c, v, disp:r2(c - v)}); });
+  });
   $('#vista').innerHTML = `
+    <div class="card"><h2>🚚 Carga de ruta</h2>
+      <p class="peq">Lo que le entregas a este repartidor antes de que salga · hoy ${fmtFecha(hoy())}.</p>
+      ${reps.length ? `<label>Repartidor</label><select id="cr-rep" onchange="CR.rep=this.value;CR.cart={...(CR.porRep[this.value]||{})};pintarCarga()">
+        ${reps.map(u => `<option value="${u.id}" ${CR.rep===u.id?'selected':''}>${esc(u.nombre)}</option>`).join('')}</select>
+        <div id="cr-prods" style="margin-top:8px"></div>
+        <button class="btn grande verde" style="margin-top:10px" onclick="guardarCarga()">✔ Guardar carga de hoy</button>`
+        : '<p class="aviso">No hay repartidores activos. Créalos en “Usuarios”.</p>'}
+      ${filasResumen.length ? `<h3 style="margin-top:16px">Lo que le queda a cada quien <small>(cargado − vendido hoy)</small></h3>
+        <p class="peq">Se actualiza cada vez que abres esta pantalla; no es en vivo, porque este sistema no usa conexión permanente (funciona sin señal). Las ventas guardadas en el teléfono de un repartidor sin conexión aparecen aquí solo cuando se sincronizan.</p>
+        <div class="tabla-wrap"><table class="tabla"><thead><tr><th>Repartidor</th><th>Producto</th><th class="n">Cargado</th><th class="n">Vendido</th><th class="n">Disponible</th></tr></thead><tbody>
+        ${filasResumen.map(x => `<tr><td>${esc(x.rep.nombre)}</td><td>${ICONO_CAT[(S.productos.find(p=>p.id===x.pid)||{}).categoria] || ''} ${esc(nomProd(x.pid))}</td><td class="n">${x.c}</td><td class="n">${x.v}</td><td class="n ${x.disp<0?'neg':''}">${x.disp}</td></tr>`).join('')}
+        </tbody></table></div>` : ''}
+    </div>
     <div class="dos">
     <div class="card"><h2>🏭 Registrar producción</h2>
       <label>Fecha</label><input type="date" id="pr-f" value="${hoy()}" max="${hoy()}">
-      <div class="grid"><div><label>Litros producidos</label><input id="pr-l" inputmode="decimal" placeholder="0"></div>
+      <label>Garrafones llenados</label>
+      <div class="grid"><div><label>🏷️ Con marca</label><input id="pr-gm" inputmode="numeric" placeholder="0"></div>
+        <div><label>⚪ Genéricos</label><input id="pr-gg" inputmode="numeric" placeholder="0"></div>
         <div><label>Bolsas producidas</label><input id="pr-b" inputmode="numeric" placeholder="0"></div></div>
       <label>Insumos usados <small>(opcional)</small></label>
       ${[1,2,3].map(i => `<div class="grid" style="grid-template-columns:2fr 1fr;margin-bottom:6px"><input id="pr-in${i}" placeholder="Insumo (ej. cloro, filtro, sal)"><input id="pr-iq${i}" inputmode="decimal" placeholder="Cant."></div>`).join('')}
@@ -1771,16 +1910,17 @@ VISTAS.prod = async () => {
       <button class="btn grande" style="margin-top:8px" onclick="guardarInvMov()">Guardar movimiento</button>
       <p class="peq">En “Ajuste” puedes escribir una cantidad negativa para restar.</p></div></div>
     <div class="card"><h3>Producción reciente</h3>
-      ${prods.length ? `<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Fecha</th><th class="n">Litros</th><th class="n">Bolsas</th><th>Insumos</th></tr></thead><tbody>
-      ${prods.map(p => `<tr><td>${fmtFecha(p.fecha)}</td><td class="n">${p.litros_producidos}</td><td class="n">${p.bolsas_producidas}</td><td><small>${Object.entries(p.insumos_usados || {}).map(([k,v]) => esc(k) + ': ' + esc(v)).join(', ') || '—'}</small></td></tr>`).join('')}</tbody></table></div>` : '<p class="peq">Sin registros.</p>'}</div>
+      ${prods.length ? `<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Fecha</th><th class="n">🏷️ Marca</th><th class="n">⚪ Genérico</th><th class="n">Bolsas</th><th>Insumos</th></tr></thead><tbody>
+      ${prods.map(p => `<tr><td>${fmtFecha(p.fecha)}</td><td class="n">${p.garrafones_marca||0}</td><td class="n">${p.garrafones_generico||0}</td><td class="n">${p.bolsas_producidas}</td><td><small>${Object.entries(p.insumos_usados || {}).map(([k,v]) => esc(k) + ': ' + esc(v)).join(', ') || '—'}</small></td></tr>`).join('')}</tbody></table></div>` : '<p class="peq">Sin registros.</p>'}</div>
     <div class="card"><h3>Movimientos manuales recientes</h3>
       ${movs.length ? `<div class="tabla-wrap"><table class="tabla"><tbody>${movs.map(m => `<tr><td>${fmtFecha(m.fecha)}</td><td>${esc(nomProd(m.producto_id))}</td><td>${m.tipo}</td><td class="n">${m.cantidad}</td><td><small>${esc(m.motivo || '')}</small></td></tr>`).join('')}</tbody></table></div>` : '<p class="peq">Sin movimientos.</p>'}</div>`;
+  if(reps.length) pintarCarga();
 };
 async function guardarProduccion(){
-  const litros = num($('#pr-l').value), bolsas = Math.round(num($('#pr-b').value));
-  if(litros <= 0 && bolsas <= 0) return toast('Escribe litros o bolsas producidas', 'warn');
+  const marca = Math.round(num($('#pr-gm').value)), generico = Math.round(num($('#pr-gg').value)), bolsas = Math.round(num($('#pr-b').value));
+  if(marca <= 0 && generico <= 0 && bolsas <= 0) return toast('Escribe al menos un garrafón o bolsas producidas', 'warn');
   const ins = {}; [1,2,3].forEach(i => { const n = $('#pr-in'+i).value.trim(), q = num($('#pr-iq'+i).value); if(n) ins[n] = q; });
-  const {error} = await sb.from('produccion').insert({fecha:$('#pr-f').value || hoy(), litros_producidos:litros, bolsas_producidas:bolsas, insumos_usados:ins, usuario_id:S.user.id});
+  const {error} = await sb.from('produccion').insert({fecha:$('#pr-f').value || hoy(), garrafones_marca:marca, garrafones_generico:generico, bolsas_producidas:bolsas, insumos_usados:ins, usuario_id:S.user.id});
   if(error) return toast(errMsg(error), 'err'); toast('Producción guardada ✔'); ir('prod');
 }
 async function guardarInvMov(){
@@ -1790,6 +1930,28 @@ async function guardarInvMov(){
   const {error} = await sb.from('inventario_mov').insert({fecha:hoy(), producto_id:$('#iv-p').value, tipo, cantidad:cant, motivo:$('#iv-m').value.trim() || null, usuario_id:S.user.id});
   if(error) return toast(errMsg(error), 'err'); toast('Movimiento guardado ✔'); ir('prod');
 }
+function pintarCarga(){
+  const box = $('#cr-prods'); if(!box) return;
+  const lista = S.productos.filter(p => p.activo);
+  box.innerHTML = `<div class="prods">` + lista.map(p => {
+    const q = CR.cart[p.id] || 0, ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro;
+    return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b></div>
+      <div class="stp"><button onclick="crMas('${p.id}',-1)" aria-label="Quitar">−</button><span>${q}</span><button onclick="crMas('${p.id}',1)" aria-label="Sumar">＋</button></div></div>`;
+  }).join('') + `</div>`;
+}
+function crMas(pid, d){ CR.cart[pid] = Math.max(0, (CR.cart[pid] || 0) + d); pintarCarga(); }
+async function guardarCarga(){
+  if(!CR.rep) return toast('Elige un repartidor', 'warn');
+  const filas = Object.entries(CR.cart).filter(([, q]) => q > 0).map(([pid, q]) => ({fecha:hoy(), repartidor_id:CR.rep, producto_id:pid, cantidad:q, usuario_id:S.user.id}));
+  const previos = Object.keys(CR.porRep[CR.rep] || {}), aBorrar = previos.filter(pid => !(CR.cart[pid] > 0));
+  if(!filas.length && !aBorrar.length) return toast('Agrega al menos un producto', 'warn');
+  if(filas.length){
+    const {error} = await sb.from('cargas_ruta').upsert(filas, {onConflict:'fecha,repartidor_id,producto_id'});
+    if(error) return toast(errMsg(error), 'err');
+  }
+  if(aBorrar.length) await sb.from('cargas_ruta').delete().eq('fecha', hoy()).eq('repartidor_id', CR.rep).in('producto_id', aBorrar);
+  toast('Carga de ruta guardada ✔'); ir('prod');
+}
 
 /* ---------------------------------------------------------------------
    PRECIOS Y PRODUCTOS  (solo supervisor)
@@ -1797,27 +1959,40 @@ async function guardarInvMov(){
    vigencia desde hoy. Las ventas ya hechas conservan su precio.
    --------------------------------------------------------------------- */
 const TIPOS_PRECIO = [['tienda','Tienda'],['domicilio','Domicilio'],['mayoreo','Mayoreo'],['especial','Especial']];
+const CATS_PROD = ['agua','hielo','bolsipura','garrafon','dispensador','otro'];
 VISTAS.precios = async () => {
   await cargarBase(true);
   const h = hoy();
   const vigente = (pid, t) => S.precios.filter(p => p.producto_id === pid && p.tipo_cliente === t && p.vigente_desde <= h).sort((a,b) => b.vigente_desde.localeCompare(a.vigente_desde))[0];
   const lista = S.productos.slice().sort((a,b) => (b.activo - a.activo) || a.nombre.localeCompare(b.nombre, 'es', {numeric:true}));
   $('#vista').innerHTML = `
-    <div class="card"><h2>🏷️ Precios de venta</h2>
-      <p class="peq">Escribe el precio nuevo solo donde quieras cambiarlo y toca “Guardar precios”. Entra en vigencia hoy.</p></div>
+    <div class="card"><h2>🏷️ Precios y productos</h2>
+      <p class="peq">Escribe el precio nuevo solo donde quieras cambiarlo y toca “Guardar precios” (entra en vigencia hoy). Toca “✏️ Editar producto” para cambiar el nombre, la categoría o el costo.</p></div>
     ${lista.map(p => `<div class="card ${p.activo ? '' : 'err'}" data-pid="${p.id}">
-      <div class="mh"><h3 style="margin:0">${esc(p.nombre)} ${p.activo ? '' : '<span class="badge mal">Inactivo</span>'}</h3>
-        <small>${esc(p.categoria)} · ${esc(p.unidad)}${p.controla_inventario ? ' · con inventario' : ''}</small></div>
+      <div class="mh"><h3 style="margin:0"><span class="cat-ico">${ICONO_CAT[p.categoria] || ICONO_CAT.otro}</span>${esc(p.nombre)} ${p.activo ? '' : '<span class="badge mal">Inactivo</span>'}</h3>
+        <button class="btn mini sec" onclick="const e=this.closest('.card').querySelector('.edit-prod');e.hidden=!e.hidden">✏️ Editar producto</button></div>
+      <small>${esc(p.categoria)} · ${esc(p.unidad)}${p.controla_inventario ? ' · con inventario' : ''}${+p.costo_unitario > 0 ? ' · costo ' + Q(p.costo_unitario) : ''}</small>
+      <div class="edit-prod" hidden style="margin:10px 0;padding-top:10px;border-top:1px dashed var(--borde)">
+        <div class="grid">
+          <div><label>Nombre</label><input class="ep-n" value="${esc(p.nombre)}"></div>
+          <div><label>Categoría</label><select class="ep-c">${CATS_PROD.map(c => `<option value="${c}" ${p.categoria===c?'selected':''}>${ICONO_CAT[c]} ${c}</option>`).join('')}</select></div>
+          <div><label>Unidad</label><input class="ep-u" value="${esc(p.unidad)}"></div>
+          <div><label>Costo unitario (Q) <small>para ver margen en Resultados</small></label><input class="ep-cu" inputmode="decimal" value="${+p.costo_unitario || 0}"></div>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:6px;font-weight:600"><input type="checkbox" class="ep-i" ${p.controla_inventario?'checked':''}> Descuenta inventario</label>
+        <button class="btn" style="margin-top:8px" onclick="guardarProducto('${p.id}')">Guardar cambios del producto</button>
+      </div>
       <div class="grid">${TIPOS_PRECIO.map(([t, et]) => { const v = vigente(p.id, t); return `<div><label>${et} <small>${v ? 'desde ' + fmtFecha(v.vigente_desde) : ''}</small></label>
         <input inputmode="decimal" data-t="${t}" data-orig="${v ? v.precio : ''}" placeholder="${v ? Q(v.precio) : 'sin precio'}"></div>`; }).join('')}</div>
       <div class="fila-btn"><button class="btn" onclick="guardarPrecios('${p.id}')">Guardar precios</button>
         <button class="btn sec" onclick="toggleProducto('${p.id}', ${!p.activo})">${p.activo ? 'Desactivar producto' : 'Activar producto'}</button></div></div>`).join('')}
     <div class="card"><h3>➕ Producto nuevo</h3>
       <label>Nombre</label><input id="np-n" placeholder="Ej: Dispensador de mesa">
-      <div class="grid"><div><label>Categoría</label><select id="np-c">${['agua','hielo','bolsipura','garrafon','dispensador','otro'].map(c => `<option>${c}</option>`).join('')}</select></div>
+      <div class="grid"><div><label>Categoría</label><select id="np-c">${CATS_PROD.map(c => `<option value="${c}">${ICONO_CAT[c]} ${c}</option>`).join('')}</select></div>
         <div><label>Unidad</label><input id="np-u" value="unidad"></div>
         <div><label>Descuenta inventario</label><select id="np-i"><option value="1">Sí</option><option value="0">No</option></select></div>
-        <div><label>Precio inicial (Q)</label><input id="np-p" inputmode="decimal" placeholder="0.00"></div></div>
+        <div><label>Precio inicial (Q)</label><input id="np-p" inputmode="decimal" placeholder="0.00"></div>
+        <div><label>Costo unitario (Q) <small>opcional</small></label><input id="np-cu" inputmode="decimal" placeholder="0.00"></div></div>
       <button class="btn grande" style="margin-top:8px" onclick="crearProducto()">Crear producto</button>
       <p class="peq">El precio inicial se aplica a tienda, domicilio, mayoreo y especial (luego lo ajustas arriba).</p></div>`;
 };
@@ -1833,14 +2008,25 @@ async function guardarPrecios(pid){
   if(error) return toast(errMsg(error), 'err');
   toast(`${filas.length} precio(s) actualizado(s) ✔`); ir('precios');
 }
+async function guardarProducto(pid){
+  const card = $(`[data-pid="${pid}"]`);
+  const nombre = $('.ep-n', card).value.trim();
+  if(!nombre) return toast('El nombre no puede estar vacío', 'warn');
+  const cambios = {nombre, categoria:$('.ep-c', card).value, unidad:$('.ep-u', card).value.trim() || 'unidad',
+    controla_inventario:$('.ep-i', card).checked, costo_unitario:r2(num($('.ep-cu', card).value))};
+  const {error} = await sb.from('productos').update(cambios).eq('id', pid);
+  if(error) return toast(error.code === '23505' ? 'Ya existe un producto con ese nombre' : errMsg(error), 'err');
+  toast('Producto actualizado ✔'); ir('precios');
+}
 async function toggleProducto(pid, activo){
   const {error} = await sb.from('productos').update({activo}).eq('id', pid);
   if(error) return toast(errMsg(error), 'err'); toast(activo ? 'Producto activado' : 'Producto desactivado'); ir('precios');
 }
 async function crearProducto(){
-  const nombre = $('#np-n').value.trim(), precio = num($('#np-p').value);
+  const nombre = $('#np-n').value.trim(), precio = num($('#np-p').value), costo = r2(num($('#np-cu').value));
   if(!nombre) return toast('Escribe el nombre', 'warn');
-  const {data, error} = await sb.from('productos').insert({nombre, categoria:$('#np-c').value, unidad:$('#np-u').value.trim() || 'unidad', controla_inventario:$('#np-i').value === '1'}).select().single();
+  const {data, error} = await sb.from('productos').insert({nombre, categoria:$('#np-c').value, unidad:$('#np-u').value.trim() || 'unidad',
+    controla_inventario:$('#np-i').value === '1', costo_unitario:costo}).select().single();
   if(error) return toast(errMsg(error), 'err');
   if(precio > 0){
     const {error:e2} = await sb.from('precios').insert(TIPOS_PRECIO.map(([t]) => ({producto_id:data.id, tipo_cliente:t, precio:precio, vigente_desde:hoy()})));
@@ -1874,8 +2060,22 @@ VISTAS.usuarios = async () => {
     <div class="card"><div class="mh"><h2>🛣️ Rutas</h2><button class="btn mini" onclick="editarRuta('')">+ Nueva ruta</button></div>
       ${S.rutas.length ? S.rutas.map(r => `<div class="cli-fila"><div class="cli-info"><b>${esc(r.nombre)}</b><small>Repartidor: ${esc(nombreUsuario(r.repartidor_id))} · Días: ${(r.dias_semana||[]).map(d => DIAS[d-1].slice(0,3)).join(', ') || '—'}</small></div>
         <button class="btn mini sec" onclick="editarRuta('${r.id}')">Editar</button></div>`).join('') : '<p class="peq">Aún no hay rutas.</p>'}
-      <p class="peq">Asigna cada cliente a su ruta y día en su ficha (o al importar).</p></div>`;
+      <p class="peq">Asigna cada cliente a su ruta y día en su ficha (o al importar).</p></div>
+    <div class="card"><h3>🧾 Datos del negocio <small>(para el comprobante impreso)</small></h3>
+      <label>Nombre del negocio</label><input id="ng-n" value="${esc(S.negocio.nombre||'')}" placeholder="Purificadora y Distribuidora…">
+      <label>NIT del negocio</label><input id="ng-nit" value="${esc(S.negocio.nit||'')}">
+      <label>Dirección</label><input id="ng-d" value="${esc(S.negocio.direccion||'')}">
+      <label>Teléfono</label><input id="ng-t" value="${esc(S.negocio.telefono||'')}">
+      <button class="btn grande" style="margin-top:8px" onclick="guardarNegocio()">Guardar datos del negocio</button>
+      <p class="peq">Aparecen en el encabezado del comprobante que se imprime cuando el cliente tiene NIT.</p></div>`;
 };
+async function guardarNegocio(){
+  const fila = {id:1, nombre:$('#ng-n').value.trim() || null, nit:$('#ng-nit').value.trim() || null,
+    direccion:$('#ng-d').value.trim() || null, telefono:$('#ng-t').value.trim() || null};
+  const {error} = await sb.from('negocio_config').upsert(fila);
+  if(error) return toast(error.code === '42P01' ? 'Falta correr la actualización de la base de datos (08_actualizacion_v3.sql)' : errMsg(error), 'err');
+  S.negocio = fila; if(S.base) S.base.negocio = [fila]; persistirBase(); toast('Datos del negocio guardados ✔');
+}
 async function crearUsuario(){
   const nombre = $('#nu-n').value.trim(), email = $('#nu-e').value.trim(), pass = $('#nu-p').value, rol = $('#nu-r').value;
   if(!nombre || !email || pass.length < 6) return toast('Completa nombre, correo y una contraseña de 6+ caracteres', 'warn');
