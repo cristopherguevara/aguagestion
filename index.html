@@ -213,8 +213,8 @@ details.ayuda summary{cursor:pointer;font-weight:700;color:var(--azul2)}
    ===================================================================== */
 
 // ---------- CONFIGURACIÓN (cambia estas dos líneas) ----------
-const SUPABASE_URL      = 'https://gacualjiiudcbucwfecs.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdhY3VhbGppaXVkY2J1Y3dmZWNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1NTgwNDgsImV4cCI6MjEwNjEzNDA0OH0.iny-tAjEA7iEt0qey8J_6Lw0sEeR7Gg91glcqG_pNp4';
+const SUPABASE_URL      = 'https://TU-PROYECTO.supabase.co';
+const SUPABASE_ANON_KEY = 'TU-ANON-KEY-PUBLICA';
 const ZONA      = 'America/Guatemala';
 const CACHE_MIN = 5;                     // minutos entre refrescos de la caché de clientes
 
@@ -421,14 +421,15 @@ function tocarClienteLocal(id, cambios){
    PRECIOS
    --------------------------------------------------------------------- */
 // Precio especial del cliente > precio vigente por tipo (tienda/domicilio) > domicilio
-function precioDe(pid, cid, tipo){
-  if(cid && S.pc[cid+'|'+pid] != null) return +S.pc[cid+'|'+pid];
+function precioDe(pid, cid, tipo, mayoreo){
+  if(cid && S.pc[cid+'|'+pid] != null) return +S.pc[cid+'|'+pid];   // precio especial del cliente: siempre gana
   const h = hoy();
   const buscar = t => S.precios.filter(p => p.producto_id===pid && p.tipo_cliente===t && p.vigente_desde<=h)
                                .sort((a,b) => b.vigente_desde.localeCompare(a.vigente_desde))[0];
-  const p = buscar(tipo) || buscar('domicilio') || buscar('tienda');
+  const p = (mayoreo && buscar('mayoreo')) || buscar(tipo) || buscar('domicilio') || buscar('tienda');
   return p ? +p.precio : 0;
 }
+const tienePrecioEspecial = (pid, cid) => cid && S.pc[cid+'|'+pid] != null;
 
 /* ---------------------------------------------------------------------
    COLA SIN CONEXIÓN
@@ -513,15 +514,20 @@ async function resumenDia(f, uid){
    --------------------------------------------------------------------- */
 let V = null;   // estado de la venta en curso
 async function abrirVenta(o = {}){
-  V = {cliente: o.cliente || null, cart: {...(o.cart || {})}, forma:'efectivo', prest:0, recup:0,
+  V = {cliente: o.cliente || null, cart: {...(o.cart || {})}, forma:'efectivo', prest:0, recup:0, mayoreo:false, notas:o.notas || '',
        tipo: S.rol === 'repartidor' ? 'domicilio' : (o.tipo || (o.cliente ? 'domicilio' : 'tienda'))};
+  pintarVenta();
+}
+// Repinta la pantalla de "Nueva venta" reutilizando el estado V actual (sin perder lo ya elegido).
+// Se usa tanto para abrir la venta como para "volver" después de un sub-formulario como "+ Cliente nuevo".
+function pintarVenta(){
   modal(`
     <div class="mh"><h2>Nueva venta</h2><button class="btn mini sec" onclick="cerrarModal()">✕ Cerrar</button></div>
     <div id="v-cli"></div><div id="v-tipo"></div>
-    <label>Productos <small>(toca el producto para sumar 1)</small></label><div id="v-prod"></div>
+    <label>Productos <small>(toca para sumar 1 · ⭐ = precio especial de este cliente)</small></label><div id="v-prod"></div>
     <div id="v-tambo"></div>
     <label>Forma de pago</label><div id="v-pago"></div>
-    <label for="v-notas">Notas (opcional)</label><input id="v-notas" placeholder="Ej: dejar con el portero">
+    <label for="v-notas">Notas (opcional)</label><input id="v-notas" placeholder="Ej: dejar con el portero" value="${esc(V.notas||'')}" oninput="V.notas=this.value">
     <div id="v-tot"></div>`, 'venta');
   vTodo();
 }
@@ -540,7 +546,7 @@ function vCli(){
     box.innerHTML = `<label>Cliente <small>${S.rol==='repartidor'?'':'(vacío = venta de mostrador)'}</small></label>
       <input id="v-q" placeholder="🔎 Nombre o dirección…" oninput="vBuscar(this.value)" autocomplete="off">
       <div id="v-res"></div>
-      <div class="fila-btn"><button class="btn mini sec" onclick="formNuevoCliente('', c => { V.cliente = c; vTodo(); })">+ Cliente nuevo</button></div>`;
+      <div class="fila-btn"><button class="btn mini sec" onclick="formNuevoCliente('', c => { V.cliente = c; pintarVenta(); }, pintarVenta)">+ Cliente nuevo</button></div>`;
   }
 }
 async function vBuscar(q){
@@ -566,18 +572,23 @@ async function agregarNitRapido(){
 }
 function vTipo(){
   const b = $('#v-tipo');
-  if(S.rol === 'repartidor'){ b.innerHTML = ''; return; }
+  const mayoreoHtml = `<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-weight:600">
+      <input type="checkbox" ${V.mayoreo?'checked':''} onchange="V.mayoreo=this.checked;vProd();vTot()"> 💰 Precio de mayorista</label>
+    <p class="peq" style="margin:2px 0 0">Si el producto no tiene precio de mayorista, se usa el normal.</p>`;
+  if(S.rol === 'repartidor'){ b.innerHTML = mayoreoHtml; return; }
   b.innerHTML = `<label>Tipo de venta</label><div class="seg">
     <button class="${V.tipo==='tienda'?'on':''}" onclick="V.tipo='tienda';vProd();vTipo();vTot()">🏪 Tienda</button>
-    <button class="${V.tipo==='domicilio'?'on':''}" onclick="V.tipo='domicilio';vProd();vTipo();vTot()">🛵 Domicilio</button></div>`;
+    <button class="${V.tipo==='domicilio'?'on':''}" onclick="V.tipo='domicilio';vProd();vTipo();vTot()">🛵 Domicilio</button></div>
+    ${mayoreoHtml}`;
 }
 const ICONO_CAT = {agua:'💧', garrafon:'🛢️', hielo:'🧊', bolsipura:'🧂', dispensador:'🚰', otro:'📦'};
 function vProd(){
   const orden = {agua:0, garrafon:1, hielo:2, bolsipura:3};
   const lista = S.productos.filter(p => p.activo).sort((a,b) => (orden[a.categoria] ?? 9) - (orden[b.categoria] ?? 9) || a.nombre.localeCompare(b.nombre, 'es', {numeric:true}));
   $('#v-prod').innerHTML = `<div class="prods">` + lista.map(p => {
-    const q = V.cart[p.id] || 0, pr = precioDe(p.id, V.cliente && V.cliente.id, V.tipo), ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro;
-    return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn" onclick="vMas('${p.id}',1)"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b><small>${Q(pr)}</small></div>
+    const q = V.cart[p.id] || 0, pr = precioDe(p.id, V.cliente && V.cliente.id, V.tipo, V.mayoreo), ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro;
+    const esp = tienePrecioEspecial(p.id, V.cliente && V.cliente.id);
+    return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn" onclick="vMas('${p.id}',1)"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b><small>${Q(pr)}${esp ? ' ⭐' : ''}</small></div>
       <div class="stp"><button onclick="vMas('${p.id}',-1)" aria-label="Quitar">−</button><span>${q}</span><button onclick="vMas('${p.id}',1)" aria-label="Sumar">＋</button></div></div>`;
   }).join('') + `</div>`;
 }
@@ -600,7 +611,7 @@ function vPago(){
     <button class="${V.forma==='credito'?'on':''}" ${sin?'disabled title="Elige un cliente"':''} onclick="V.forma='credito';vPago()">📒 Crédito</button></div>`;
 }
 function vTotal(){
-  return r2(Object.entries(V.cart).reduce((a,[pid,q]) => a + q * precioDe(pid, V.cliente && V.cliente.id, V.tipo), 0));
+  return r2(Object.entries(V.cart).reduce((a,[pid,q]) => a + q * precioDe(pid, V.cliente && V.cliente.id, V.tipo, V.mayoreo), 0));
 }
 function vTot(){
   const n = Object.values(V.cart).reduce((a,b) => a + b, 0);
@@ -656,7 +667,7 @@ async function guardarVenta(){
   let total = 0;
   for(const [pid, q] of Object.entries(V.cart)){
     if(q <= 0) continue;
-    const pr = precioDe(pid, cid, V.tipo), st = r2(q * pr); total += st;
+    const pr = precioDe(pid, cid, V.tipo, V.mayoreo), st = r2(q * pr); total += st;
     items.push({id:uuid(), venta_id:vid, producto_id:pid, cantidad:q, precio_unitario:pr, subtotal_q:st});
   }
   const tambos = [];
@@ -666,7 +677,7 @@ async function guardarVenta(){
   if(V.forma === 'credito' && !cid){ toast('El crédito necesita un cliente', 'warn'); btn.disabled = false; return; }
   if(items.some(i => i.precio_unitario === 0) && !confirm('Hay productos con precio Q 0.00. ¿Guardar de todos modos?')){ btn.disabled = false; return; }
   const venta = {id:vid, fecha:f, usuario_id:S.user.id, cliente_id:cid, tipo:V.tipo, forma_pago:V.forma,
-                 estado_credito: V.forma === 'credito' ? 'pendiente' : 'na', total_q:r2(total), notas:($('#v-notas').value.trim() || null)};
+                 estado_credito: V.forma === 'credito' ? 'pendiente' : 'na', total_q:r2(total), notas:((V.notas||'').trim() || null)};
   try{
     const r = await enviar(items.length ? {k:'venta', venta, detalle:items, tambos} : {k:'tambo', tambos});
     if(cid){   // actualiza la caché local para que el buscador refleje el cambio
@@ -744,6 +755,8 @@ async function dashTienda(){
         ${Object.entries(porP).sort((a,b) => b[1].q - a[1].q).map(([pid,x]) => `<tr><td>${esc(nomProd(pid))}</td><td class="n">${x.u}</td><td class="n">${Q(x.q)}</td></tr>`).join('')}
         </tbody></table></div>` : '<p class="peq">Todavía no hay ventas hoy. Toca “Nueva venta”.</p>'}
     </div>
+    ${bloqueMisVentas(r.ventas, !miCierre && S.negocio.permite_autocorreccion !== false,
+      miCierre ? 'Ya liquidaste tu día: para corregir algo, pide al supervisor.' : 'El supervisor apagó las correcciones por ahora.')}
     <div class="card"><h2>Liquidaciones de repartidores</h2>
       <p class="peq">Solo lectura. Tú puedes confirmar que viste el efectivo, no modificarlo.</p>
       <div class="dos">${reps.length ? reps.map(tarjetaRep).join('') : '<p class="peq">No hay repartidores activos.</p>'}</div>
@@ -753,6 +766,20 @@ async function dashTienda(){
       <p class="peq" style="text-align:center">Tu efectivo + el de los repartidores (confirmado cuando ya liquidaron; si no, el esperado).</p>
       <button class="btn grande ${miCierre?'sec':'verde'}" onclick="abrirLiquidacion()">${miCierre ? '✅ Mi día está liquidado (ver)' : '✅ Liquidar mi día'}</button>
     </div>`;
+}
+// Fila de una venta propia en el detalle del día, con botón de corrección si aplica
+function filaVentaDetalle(v, editable){
+  const c = S.cmap[v.cliente_id];
+  return `<tr><td>${new Date(v.created_at).toLocaleTimeString('es-GT',{timeZone:ZONA,hour:'2-digit',minute:'2-digit'})}</td>
+    <td>${esc(c ? c.direccion_corta : 'Mostrador')}</td><td>${v.forma_pago}${v.estado_credito==='pendiente'?' ⏳':''}</td>
+    <td class="n">${Q(v.total_q)}</td>
+    <td class="no-print">${editable ? `<button class="btn mini sec" onclick="abrirCorregirVenta('${v.id}')">✏️ Corregir</button>` : ''}</td></tr>`;
+}
+function bloqueMisVentas(ventas, editable, motivoNoEditable){
+  return `<div class="card"><h3>📋 Detalle de mis ventas de hoy (${ventas.length})</h3>
+    ${ventas.length ? `<div class="tabla-wrap"><table class="tabla"><thead><tr><th>Hora</th><th>Cliente</th><th>Pago</th><th class="n">Total</th><th class="no-print"></th></tr></thead><tbody>
+      ${ventas.map(v => filaVentaDetalle(v, editable)).join('')}</tbody></table></div>` : '<p class="peq">Sin ventas hoy.</p>'}
+    ${!editable && ventas.length ? `<p class="peq no-print">${esc(motivoNoEditable)}</p>` : ''}</div>`;
 }
 function tarjetaRep(t){
   const {u, r, cierre, conf} = t;
@@ -794,11 +821,13 @@ async function confirmarRep(cierreId){
 async function dashRepartidor(){
   const f = hoy(), hoyDia = diaSem(f), me = S.user.id;
   if(!S.diaSel) S.diaSel = hoyDia;
-  let r = null, carga = []; try{ r = await resumenDia(f, me); }catch(e){ if(!esRed(e)) throw e; }
+  let r = null, carga = [], miCierre = null; try{ r = await resumenDia(f, me); miCierre = await cierreDe(f, me); }catch(e){ if(!esRed(e)) throw e; }
   let vendidoHoy = {};
   try{
     if(navigator.onLine){
-      carga = await sb.from('cargas_ruta').select('*').eq('fecha', f).eq('repartidor_id', me).then(okR);
+      const filasCarga = await sb.from('cargas_ruta').select('*').eq('fecha', f).eq('repartidor_id', me).then(okR);
+      const porProd = {}; filasCarga.forEach(c => porProd[c.producto_id] = (porProd[c.producto_id] || 0) + +c.cantidad);   // puede haber varias cargas del mismo producto en el día
+      carga = Object.entries(porProd).map(([producto_id, cantidad]) => ({producto_id, cantidad}));
       vendidoHoy = await ventaDetalleHoyPorUsuario(f).then(m => m[me] || {}).catch(() => ({}));
     }
   }catch(e){ if(!esRed(e)) throw e; }
@@ -825,7 +854,9 @@ async function dashRepartidor(){
       ${r ? `<div class="grid"><div class="kpi"><small>Vendido</small><b>${Q(r.total)}</b></div><div class="kpi"><small>Efectivo esperado</small><b>${Q(r.esperado)}</b></div>
         <div class="kpi"><small>Gastos de ruta</small><b>${Q(r.gastos)}</b></div><div class="kpi"><small>Pedidos</small><b>${r.ventas.length}</b></div></div>` : '<p class="peq">Sin conexión: no puedo calcular el resumen, pero puedes seguir registrando pedidos.</p>'}
       <div class="fila-btn"><button class="btn" onclick="ir('tambos')">🛢️ Tambos</button><button class="btn" onclick="ir('gastos')">💸 Gasto de ruta</button>
-        <button class="btn verde" onclick="abrirLiquidacion()">✅ Liquidar mi día</button></div></div>`;
+        <button class="btn verde" onclick="abrirLiquidacion()">✅ Liquidar mi día</button></div></div>
+    ${r ? bloqueMisVentas(r.ventas, !miCierre && S.negocio.permite_autocorreccion !== false,
+      miCierre ? 'Ya liquidaste tu día: para corregir algo, pide al supervisor.' : 'El supervisor apagó las correcciones por ahora.') : ''}`;
   pintarDia();
 }
 function pintarDia(){
@@ -857,7 +888,7 @@ async function dashSupervisor(){
   const F = S.fil = S.fil || {desde:hoy(), hasta:hoy(), ruta:'', usuario:'', forma:''};
   const args = {p_desde:F.desde, p_hasta:F.hasta, p_usuario:F.usuario || null, p_forma:F.forma || null, p_ruta:F.ruta || null};
   const anio = +F.hasta.slice(0,4);
-  const [tot, prods, gastos, comp, cxc, cierres, vlist, vis] = await Promise.all([
+  const [tot, prods, gastos, comp, cxc, cierres, vlist, vis, correcciones] = await Promise.all([
     rpc('rpt_totales', args), rpc('rpt_ventas_producto', args),
     rpc('rpt_gastos', {p_desde:F.desde, p_hasta:F.hasta, p_usuario:F.usuario || null}),
     rpc('rpt_comparativo', {p_anio:anio}),
@@ -865,7 +896,8 @@ async function dashSupervisor(){
     sb.from('cierres_diarios').select('*').gte('fecha',F.desde).lte('fecha',F.hasta).order('fecha',{ascending:false}).limit(40).then(okR),
     sb.from('ventas').select('id,fecha,tipo,forma_pago,estado_credito,total_q,cliente_id,usuario_id,notas').gte('fecha',F.desde).lte('fecha',F.hasta)
       .order('fecha',{ascending:false}).order('created_at',{ascending:false}).limit(150).then(okR),
-    sb.from('ventas').select('cliente_id').eq('fecha', F.hasta).not('cliente_id','is',null).then(okR)
+    sb.from('ventas').select('cliente_id').eq('fecha', F.hasta).not('cliente_id','is',null).then(okR),
+    sb.from('ventas_correcciones').select('*, ventas(cliente_id)').gte('created_at', hoy()).order('created_at', {ascending:false}).then(r => r.error ? [] : r.data)
   ]);
   const suma = fn => r2(tot.filter(fn).reduce((a,x) => a + +x.total_q, 0));
   const nVentas = tot.reduce((a,x) => a + +x.ventas, 0);
@@ -909,6 +941,15 @@ async function dashSupervisor(){
         <div class="kpi"><small>🏦 Transferencia</small><b>${Q(suma(x => x.forma_pago==='transferencia'))}</b></div>
         <div class="kpi"><small>📒 Crédito</small><b>${Q(suma(x => x.forma_pago==='credito'))}</b></div>
         <div class="kpi"><small>💸 Gastos</small><b>${Q(gTot)}</b></div></div></div>
+
+    ${correcciones.length ? `<div class="card ${correcciones.length>=5?'err':''}"><h3>🛠️ Correcciones de ventas de hoy (${correcciones.length})</h3>
+      ${correcciones.length>=5 ? '<p class="aviso">Hay bastantes correcciones hoy. Si se repite seguido, revisa con el empleado o apaga la opción en Usuarios → Datos del negocio.</p>' : ''}
+      <div class="tabla-wrap"><table class="tabla"><thead><tr><th>Hora</th><th>Quién corrigió</th><th>Cliente</th><th>Antes → Después</th><th>Comentario</th></tr></thead><tbody>
+      ${correcciones.map(c => `<tr><td>${new Date(c.created_at).toLocaleTimeString('es-GT',{timeZone:ZONA,hour:'2-digit',minute:'2-digit'})}</td><td>${esc(nombreUsuario(c.usuario_id))}</td>
+        <td>${esc((S.cmap[(c.ventas||{}).cliente_id]||{}).direccion_corta || 'Mostrador')}</td>
+        <td>${Q(c.antes.total_q)} → ${Q(c.despues.total_q)}${c.antes.forma_pago!==c.despues.forma_pago?`<br><small>${esc(c.antes.forma_pago)} → ${esc(c.despues.forma_pago)}</small>`:''}</td>
+        <td><small>${esc(c.comentario)}</small></td></tr>`).join('')}
+      </tbody></table></div></div>` : ''}
 
     <div class="dos">
     <div class="card"><h3>Ventas por producto</h3><div class="tabla-wrap"><table class="tabla"><thead><tr><th>Producto</th><th class="n">Tienda u.</th><th class="n">Tienda Q</th><th class="n">Reparto u.</th><th class="n">Reparto Q</th><th class="n">Total Q</th></tr></thead><tbody>
@@ -1083,18 +1124,24 @@ function formNuevoCliente(dir, cb, volver){
   modal(`<div class="mh"><h2>Cliente nuevo</h2><button class="btn mini sec" onclick="S._ncVolver()">✕ Cerrar</button></div>
     <label>Nombre *</label><input id="nc-n" autocomplete="off">
     <label>Dirección corta * <small>(ej. 10 calle A 12-25)</small></label><input id="nc-d" value="${esc(dir||'')}" autocomplete="off">
+    <label>Dirección completa <small>(opcional, con más referencias)</small></label><input id="nc-dc" autocomplete="off">
     <label>Teléfono</label><input id="nc-t" inputmode="tel">
     <label>NIT <small>(opcional, si pide factura)</small></label><input id="nc-nit" autocomplete="off">
-    <label>Día de ruta</label><select id="nc-dia"><option value="">Sin día</option>${DIAS.map((d,i) => `<option value="${i+1}">${d}</option>`).join('')}</select>
     <label>Zona</label><input id="nc-z" placeholder="Zona 1, Mercado…">
-    <div class="fila-btn"><button class="btn verde" onclick="guardarNuevoCliente()">Guardar cliente</button><button class="btn sec" onclick="S._ncVolver()">Cancelar</button></div>`);
+    <label>Ruta</label><select id="nc-ruta"><option value="">Sin ruta</option>${S.rutas.map(r => `<option value="${r.id}">${esc(r.nombre)}</option>`).join('')}</select>
+    <label>Día de ruta</label><select id="nc-dia"><option value="">Sin día</option>${DIAS.map((d,i) => `<option value="${i+1}">${d}</option>`).join('')}</select>
+    <label>Frecuencia <small>(opcional, ej. semanal, quincenal)</small></label><input id="nc-frec">
+    <label>Notas</label><textarea id="nc-notas" placeholder="Cualquier dato útil sobre este cliente"></textarea>
+    <div class="fila-btn"><button class="btn verde" onclick="guardarNuevoCliente()">Guardar cliente</button><button class="btn sec" onclick="S._ncVolver()">Cancelar</button></div>
+    <p class="peq">La foto y la ubicación (GPS) se agregan después, desde la ficha del cliente.</p>`);
 }
 async function guardarNuevoCliente(){
   const nombre = $('#nc-n').value.trim(), dir = $('#nc-d').value.trim();
   if(!nombre || !dir){ toast('Escribe el nombre y la dirección corta', 'warn'); return; }
   if(!navigator.onLine){ toast('Crear clientes requiere internet', 'warn'); return; }
-  const obj = {id:uuid(), nombre, direccion_corta:dir, telefono:$('#nc-t').value.trim() || null, nit:$('#nc-nit').value.trim() || null,
-               dia_semana:+$('#nc-dia').value || null, zona:$('#nc-z').value.trim() || null, estado:'activo'};
+  const obj = {id:uuid(), nombre, direccion_corta:dir, direccion_completa:$('#nc-dc').value.trim() || null, telefono:$('#nc-t').value.trim() || null, nit:$('#nc-nit').value.trim() || null,
+               ruta_id:$('#nc-ruta').value || null, dia_semana:+$('#nc-dia').value || null, zona:$('#nc-z').value.trim() || null,
+               frecuencia:$('#nc-frec').value.trim() || null, notas:$('#nc-notas').value.trim() || null, estado:'activo'};
   const {data, error} = await sb.from('clientes').insert(obj).select(COLS_CLIENTE).single();
   if(error){ toast(error.code === '23505' ? 'Ya existe un cliente con esa dirección corta' : errMsg(error), 'err'); return; }
   S.clientes.push(data); S.cmap[data.id] = data; tocarClienteLocal(data.id, {});
@@ -1265,6 +1312,63 @@ async function guardarFicha(){
   const {error} = await sb.from('clientes').update(obj).eq('id', S.fc.id);
   if(error) return toast(errMsg(error), 'err');
   tocarClienteLocal(S.fc.id, obj); toast('Cliente actualizado ✔');
+}
+/* ---------------------------------------------------------------------
+   CORREGIR UNA VENTA PROPIA DEL DÍA (con comentario obligatorio)
+   Reutiliza los mismos controles de producto que la venta nueva; solo
+   permite cambiar cantidades/productos y la forma de pago, no el cliente
+   ni la fecha. Todo se valida también del lado del servidor (función
+   corregir_venta), así que esto es además una ayuda de interfaz.
+   --------------------------------------------------------------------- */
+let CV = null;
+async function abrirCorregirVenta(ventaId){
+  if(!navigator.onLine){ toast('Corregir una venta requiere internet', 'warn'); return; }
+  modal('<p class="cargando">Cargando venta…</p>');
+  try{
+    const [{data:v, error:e1}, {data:det, error:e2}] = await Promise.all([
+      sb.from('ventas').select('*').eq('id', ventaId).maybeSingle(),
+      sb.from('venta_detalle').select('*').eq('venta_id', ventaId)
+    ]);
+    if(e1) throw e1; if(e2) throw e2;
+    if(!v){ cerrarModal(); return toast('No encontré la venta', 'err'); }
+    const cart = {}; det.forEach(d => cart[d.producto_id] = +d.cantidad);
+    CV = {venta:v, cart, precios:Object.fromEntries(det.map(d => [d.producto_id, +d.precio_unitario])), forma:v.forma_pago, mayoreo:false};
+    pintarCorregirVenta();
+  }catch(e){ cerrarModal(); toast(errMsg(e), 'err'); }
+}
+function cvPrecio(pid){
+  if(CV.precios[pid] != null) return CV.precios[pid];   // línea que ya existía: conserva su precio original
+  return precioDe(pid, CV.venta.cliente_id, CV.venta.tipo, CV.mayoreo);   // línea nueva agregada en la corrección
+}
+function pintarCorregirVenta(){
+  const c = S.cmap[CV.venta.cliente_id], lista = S.productos.filter(p => p.activo || CV.cart[p.id]);
+  const total = r2(Object.entries(CV.cart).reduce((a,[pid,q]) => a + q * cvPrecio(pid), 0));
+  modal(`<div class="mh"><h2>✏️ Corregir venta</h2><button class="btn mini sec" onclick="cerrarModal()">✕ Cerrar</button></div>
+    <p class="peq">${fmtFecha(CV.venta.fecha)} · ${esc(c ? c.direccion_corta : 'Mostrador')}${c ? ' · '+esc(c.nombre) : ''}</p>
+    <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" ${CV.mayoreo?'checked':''} onchange="CV.mayoreo=this.checked;pintarCorregirVenta()"> 💰 Precio de mayorista <small>(solo afecta productos nuevos que agregues aquí)</small></label>
+    <label>Productos <small>(toca para sumar 1 · ⭐ = precio especial de este cliente)</small></label>
+    <div class="prods">${lista.map(p => { const q = CV.cart[p.id] || 0, ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro, esp = tienePrecioEspecial(p.id, CV.venta.cliente_id);
+      return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn" onclick="cvMas('${p.id}',1)"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b><small>${Q(cvPrecio(p.id))}${esp ? ' ⭐' : ''}</small></div>
+        <div class="stp"><button onclick="cvMas('${p.id}',-1)" aria-label="Quitar">−</button><span>${q}</span><button onclick="cvMas('${p.id}',1)" aria-label="Sumar">＋</button></div></div>`; }).join('')}</div>
+    <label>Forma de pago</label>
+    <div class="seg">${[['efectivo','💵 Efectivo'],['transferencia','🏦 Transf.'],['credito','📒 Crédito']].map(([k,t]) =>
+      `<button class="${CV.forma===k?'on':''}" ${k==='credito' && !c ? 'disabled title="Necesita un cliente"' : ''} onclick="CV.forma='${k}';pintarCorregirVenta()">${t}</button>`).join('')}</div>
+    <label for="cv-com">Comentario <small>(obligatorio, explica qué estaba mal)</small></label>
+    <textarea id="cv-com" placeholder="Ej: me equivoqué, era 1 garrafón y no 2">${esc(CV._comentario||'')}</textarea>
+    <div class="total-grande" style="margin-top:10px">${Q(total)}</div>
+    <button class="btn grande verde" style="margin-top:10px" onclick="guardarCorreccion()">✔ Guardar corrección</button>`);
+}
+function cvMas(pid, d){ CV.cart[pid] = Math.max(0, (CV.cart[pid] || 0) + d); pintarCorregirVenta(); }
+async function guardarCorreccion(){
+  const comentario = $('#cv-com').value.trim(); CV._comentario = comentario;
+  if(comentario.length < 5) return toast('Escribe un comentario explicando la corrección (mínimo 5 letras)', 'warn');
+  const items = Object.entries(CV.cart).filter(([,q]) => q > 0).map(([pid,q]) => ({producto_id:pid, cantidad:q, precio_unitario:cvPrecio(pid)}));
+  if(!items.length) return toast('La venta debe tener al menos un producto', 'warn');
+  if(CV.forma === 'credito' && !CV.venta.cliente_id) return toast('El crédito necesita un cliente', 'warn');
+  try{
+    await rpc('corregir_venta', {p_venta_id:CV.venta.id, p_items:items, p_forma_pago:CV.forma, p_comentario:comentario});
+    cerrarModal(); toast('Venta corregida ✔'); ir('inicio');
+  }catch(e){ toast(errMsg(e), 'err'); }
 }
 async function guardarNit(){
   const v = $('#f-nit').value.trim();
@@ -1865,9 +1969,10 @@ VISTAS.prod = async () => {
   ]);
   const invProd = S.productos.filter(p => p.activo && p.controla_inventario);
   const reps = S.usuarios.filter(u => u.rol === 'repartidor' && u.activo);
-  CR.porRep = {}; cargasHoy.forEach(r => { (CR.porRep[r.repartidor_id] ||= {})[r.producto_id] = +r.cantidad; });
+  // Suma TODAS las cargas del día (puede haber varias por el mismo producto: cada una es una fila aparte)
+  CR.porRep = {}; cargasHoy.forEach(r => { const m = (CR.porRep[r.repartidor_id] ||= {}); m[r.producto_id] = (m[r.producto_id] || 0) + +r.cantidad; });
   if(!CR.rep || !reps.some(r => r.id === CR.rep)) CR.rep = reps[0] ? reps[0].id : null;
-  CR.cart = {...(CR.porRep[CR.rep] || {})};
+  CR.cart = {};   // cada visita a esta pantalla empieza en cero: lo que marques aquí se SUMA a lo ya cargado hoy, no lo reemplaza
   // Combina, por repartidor, lo cargado hoy con lo que ya vendió (aunque haya vendido algo que no estaba en la carga)
   const filasResumen = [];
   reps.forEach(u => {
@@ -1878,16 +1983,24 @@ VISTAS.prod = async () => {
   $('#vista').innerHTML = `
     <div class="card"><h2>🚚 Carga de ruta</h2>
       <p class="peq">Lo que le entregas a este repartidor antes de que salga · hoy ${fmtFecha(hoy())}.</p>
-      ${reps.length ? `<label>Repartidor</label><select id="cr-rep" onchange="CR.rep=this.value;CR.cart={...(CR.porRep[this.value]||{})};pintarCarga()">
+      <p class="peq">Puedes cargar varias veces en el mismo día (por ejemplo, si el repartidor vuelve por más): lo que marques aquí se <b>suma</b> a lo que ya tiene cargado hoy, no lo reemplaza.</p>
+      ${reps.length ? `<label>Repartidor</label><select id="cr-rep" onchange="CR.rep=this.value;CR.cart={};pintarCarga()">
         ${reps.map(u => `<option value="${u.id}" ${CR.rep===u.id?'selected':''}>${esc(u.nombre)}</option>`).join('')}</select>
         <div id="cr-prods" style="margin-top:8px"></div>
-        <button class="btn grande verde" style="margin-top:10px" onclick="guardarCarga()">✔ Guardar carga de hoy</button>`
+        <button class="btn grande verde" style="margin-top:10px" onclick="guardarCarga()">✔ Agregar esta carga</button>`
         : '<p class="aviso">No hay repartidores activos. Créalos en “Usuarios”.</p>'}
       ${filasResumen.length ? `<h3 style="margin-top:16px">Lo que le queda a cada quien <small>(cargado − vendido hoy)</small></h3>
         <p class="peq">Se actualiza cada vez que abres esta pantalla; no es en vivo, porque este sistema no usa conexión permanente (funciona sin señal). Las ventas guardadas en el teléfono de un repartidor sin conexión aparecen aquí solo cuando se sincronizan.</p>
         <div class="tabla-wrap"><table class="tabla"><thead><tr><th>Repartidor</th><th>Producto</th><th class="n">Cargado</th><th class="n">Vendido</th><th class="n">Disponible</th></tr></thead><tbody>
         ${filasResumen.map(x => `<tr><td>${esc(x.rep.nombre)}</td><td>${ICONO_CAT[(S.productos.find(p=>p.id===x.pid)||{}).categoria] || ''} ${esc(nomProd(x.pid))}</td><td class="n">${x.c}</td><td class="n">${x.v}</td><td class="n ${x.disp<0?'neg':''}">${x.disp}</td></tr>`).join('')}
         </tbody></table></div>` : ''}
+      ${cargasHoy.length ? `<details class="ayuda" style="margin-top:12px"><summary>Historial de cargas de hoy (${cargasHoy.length}) · corregir una equivocación</summary>
+        <div class="tabla-wrap"><table class="tabla"><thead><tr><th>Hora</th><th>Repartidor</th><th>Producto</th><th class="n">Cantidad</th><th>Quién cargó</th><th class="no-print"></th></tr></thead><tbody>
+        ${cargasHoy.slice().sort((a,b) => b.created_at.localeCompare(a.created_at)).map(c => `<tr><td>${new Date(c.created_at).toLocaleTimeString('es-GT',{timeZone:ZONA,hour:'2-digit',minute:'2-digit'})}</td>
+          <td>${esc(nombreUsuario(c.repartidor_id))}</td><td>${esc(nomProd(c.producto_id))}</td><td class="n">${+c.cantidad}</td><td>${esc(nombreUsuario(c.usuario_id))}</td>
+          <td class="no-print"><button class="btn mini rojo" onclick="borrarCarga('${c.id}')" aria-label="Borrar">🗑</button></td></tr>`).join('')}
+        </tbody></table></div>
+        <p class="peq">Si cargaste una cantidad equivocada, bórrala aquí y vuelve a registrarla arriba.</p></details>` : ''}
     </div>
     <div class="dos">
     <div class="card"><h2>🏭 Registrar producción</h2>
@@ -1932,25 +2045,28 @@ async function guardarInvMov(){
 }
 function pintarCarga(){
   const box = $('#cr-prods'); if(!box) return;
-  const lista = S.productos.filter(p => p.activo);
+  const lista = S.productos.filter(p => p.activo), yaCargado = CR.porRep[CR.rep] || {};
   box.innerHTML = `<div class="prods">` + lista.map(p => {
-    const q = CR.cart[p.id] || 0, ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro;
-    return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b></div>
+    const q = CR.cart[p.id] || 0, ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro, ya = yaCargado[p.id] || 0;
+    return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b>${ya ? `<small>Ya tiene ${ya} hoy</small>` : ''}</div>
       <div class="stp"><button onclick="crMas('${p.id}',-1)" aria-label="Quitar">−</button><span>${q}</span><button onclick="crMas('${p.id}',1)" aria-label="Sumar">＋</button></div></div>`;
   }).join('') + `</div>`;
 }
 function crMas(pid, d){ CR.cart[pid] = Math.max(0, (CR.cart[pid] || 0) + d); pintarCarga(); }
 async function guardarCarga(){
   if(!CR.rep) return toast('Elige un repartidor', 'warn');
+  // Cada carga es una fila nueva que se SUMA a lo que ya tenía hoy (nunca reemplaza ni borra cargas anteriores del día)
   const filas = Object.entries(CR.cart).filter(([, q]) => q > 0).map(([pid, q]) => ({fecha:hoy(), repartidor_id:CR.rep, producto_id:pid, cantidad:q, usuario_id:S.user.id}));
-  const previos = Object.keys(CR.porRep[CR.rep] || {}), aBorrar = previos.filter(pid => !(CR.cart[pid] > 0));
-  if(!filas.length && !aBorrar.length) return toast('Agrega al menos un producto', 'warn');
-  if(filas.length){
-    const {error} = await sb.from('cargas_ruta').upsert(filas, {onConflict:'fecha,repartidor_id,producto_id'});
-    if(error) return toast(errMsg(error), 'err');
-  }
-  if(aBorrar.length) await sb.from('cargas_ruta').delete().eq('fecha', hoy()).eq('repartidor_id', CR.rep).in('producto_id', aBorrar);
-  toast('Carga de ruta guardada ✔'); ir('prod');
+  if(!filas.length) return toast('Marca al menos un producto para cargar', 'warn');
+  const {error} = await sb.from('cargas_ruta').insert(filas);
+  if(error) return toast(errMsg(error), 'err');
+  toast('Carga agregada ✔'); ir('prod');
+}
+async function borrarCarga(id){
+  if(!confirm('¿Borrar esta carga? No se puede deshacer.')) return;
+  const {error} = await sb.from('cargas_ruta').delete().eq('id', id);
+  if(error) return toast(errMsg(error), 'err');
+  toast('Carga borrada'); ir('prod');
 }
 
 /* ---------------------------------------------------------------------
@@ -2066,14 +2182,16 @@ VISTAS.usuarios = async () => {
       <label>NIT del negocio</label><input id="ng-nit" value="${esc(S.negocio.nit||'')}">
       <label>Dirección</label><input id="ng-d" value="${esc(S.negocio.direccion||'')}">
       <label>Teléfono</label><input id="ng-t" value="${esc(S.negocio.telefono||'')}">
-      <button class="btn grande" style="margin-top:8px" onclick="guardarNegocio()">Guardar datos del negocio</button>
-      <p class="peq">Aparecen en el encabezado del comprobante que se imprime cuando el cliente tiene NIT.</p></div>`;
+      <hr style="border:none;border-top:1px solid var(--borde);margin:14px 0">
+      <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="ng-ac" ${S.negocio.permite_autocorreccion!==false?'checked':''}> Permitir que tienda y repartidor corrijan sus propias ventas del día</label>
+      <p class="peq">Si está encendido, cada quien puede corregir una venta que registró hoy (mientras no haya liquidado su día), escribiendo un comentario obligatorio. Tú ves todas las correcciones en el Panel. Si notas abusos, apágalo aquí.</p>
+      <button class="btn grande" style="margin-top:8px" onclick="guardarNegocio()">Guardar datos del negocio</button></div>`;
 };
 async function guardarNegocio(){
   const fila = {id:1, nombre:$('#ng-n').value.trim() || null, nit:$('#ng-nit').value.trim() || null,
-    direccion:$('#ng-d').value.trim() || null, telefono:$('#ng-t').value.trim() || null};
+    direccion:$('#ng-d').value.trim() || null, telefono:$('#ng-t').value.trim() || null, permite_autocorreccion:$('#ng-ac').checked};
   const {error} = await sb.from('negocio_config').upsert(fila);
-  if(error) return toast(error.code === '42P01' ? 'Falta correr la actualización de la base de datos (08_actualizacion_v3.sql)' : errMsg(error), 'err');
+  if(error) return toast(error.code === '42P01' || error.code === '42703' ? 'Falta correr la actualización de la base de datos (08 y 09_actualizacion_*.sql)' : errMsg(error), 'err');
   S.negocio = fila; if(S.base) S.base.negocio = [fila]; persistirBase(); toast('Datos del negocio guardados ✔');
 }
 async function crearUsuario(){
