@@ -572,10 +572,12 @@ async function agregarNitRapido(){
 }
 function vTipo(){
   const b = $('#v-tipo');
-  const mayoreoHtml = `<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-weight:600">
+  // Solo tienda y supervisor pueden elegir precio de mayorista a la hora de vender; el repartidor no,
+  // para que el precio de cada cliente quede definido de antemano (precio especial en su ficha) y no a su criterio.
+  const mayoreoHtml = S.rol === 'repartidor' ? '' : `<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-weight:600">
       <input type="checkbox" ${V.mayoreo?'checked':''} onchange="V.mayoreo=this.checked;vProd();vTot()"> 💰 Precio de mayorista</label>
     <p class="peq" style="margin:2px 0 0">Si el producto no tiene precio de mayorista, se usa el normal.</p>`;
-  if(S.rol === 'repartidor'){ b.innerHTML = mayoreoHtml; return; }
+  if(S.rol === 'repartidor'){ b.innerHTML = ''; return; }
   b.innerHTML = `<label>Tipo de venta</label><div class="seg">
     <button class="${V.tipo==='tienda'?'on':''}" onclick="V.tipo='tienda';vProd();vTipo();vTot()">🏪 Tienda</button>
     <button class="${V.tipo==='domicilio'?'on':''}" onclick="V.tipo='domicilio';vProd();vTipo();vTot()">🛵 Domicilio</button></div>
@@ -1097,7 +1099,7 @@ VISTAS.clientes = async () => {
   $('#vista').innerHTML = `
     <div class="card"><h2>🔎 Buscar cliente</h2>
       <input id="bq" placeholder="Nombre o dirección (ej. 14 av 9-74, mercado, dona marta)" oninput="pintarBusqueda()" autocomplete="off">
-      <div class="fila-btn"><button class="btn mini sec" onclick="formNuevoCliente('', () => ir('clientes'), () => ir('clientes'))">+ Cliente nuevo</button>
+      <div class="fila-btn"><button class="btn mini sec" onclick="formNuevoCliente('', c => { cerrarModal(); ir('clientes'); }, () => { cerrarModal(); ir('clientes'); })">+ Cliente nuevo</button>
         <button class="btn mini sec" onclick="cargarBase(true).then(() => { toast('Clientes actualizados'); pintarBusqueda(); })">↻ Actualizar lista</button></div>
       <p class="peq">${S.clientes.length} clientes en este teléfono.</p>
       <div id="bres"></div></div>
@@ -1121,6 +1123,8 @@ async function pintarBusqueda(){
    --------------------------------------------------------------------- */
 function formNuevoCliente(dir, cb, volver){
   S._ncCb = cb; S._ncVolver = volver || cerrarModal;
+  S._ncId = uuid(); S._ncFoto = null; S._ncPE = [];   // precios especiales que se agreguen aquí, antes de guardar
+  const sup = S.rol === 'supervisor';   // igual que en la ficha: los precios especiales solo los controla el supervisor
   modal(`<div class="mh"><h2>Cliente nuevo</h2><button class="btn mini sec" onclick="S._ncVolver()">✕ Cerrar</button></div>
     <label>Nombre *</label><input id="nc-n" autocomplete="off">
     <label>Dirección corta * <small>(ej. 10 calle A 12-25)</small></label><input id="nc-d" value="${esc(dir||'')}" autocomplete="off">
@@ -1131,19 +1135,62 @@ function formNuevoCliente(dir, cb, volver){
     <label>Ruta</label><select id="nc-ruta"><option value="">Sin ruta</option>${S.rutas.map(r => `<option value="${r.id}">${esc(r.nombre)}</option>`).join('')}</select>
     <label>Día de ruta</label><select id="nc-dia"><option value="">Sin día</option>${DIAS.map((d,i) => `<option value="${i+1}">${d}</option>`).join('')}</select>
     <label>Frecuencia <small>(opcional, ej. semanal, quincenal)</small></label><input id="nc-frec">
-    <label>Notas</label><textarea id="nc-notas" placeholder="Cualquier dato útil sobre este cliente"></textarea>
-    <div class="fila-btn"><button class="btn verde" onclick="guardarNuevoCliente()">Guardar cliente</button><button class="btn sec" onclick="S._ncVolver()">Cancelar</button></div>
-    <p class="peq">La foto y la ubicación (GPS) se agregan después, desde la ficha del cliente.</p>`);
+    <label for="nc-ubi">Ubicación <small>(opcional)</small></label>
+    <input id="nc-ubi" placeholder="14.6349, -90.5069   o   link de Google Maps" autocomplete="off">
+    <div class="fila-btn"><button class="btn mini" onclick="usarUbicacionActual('nc-ubi')">📍 Usar mi ubicación actual</button></div>
+    <label>Foto del lugar <small>(opcional)</small></label>
+    <div id="nc-foto-prev"></div>
+    <div class="fila-btn"><button class="btn mini" onclick="$('#nc-cam').click()">📷 Tomar foto</button><button class="btn mini sec" onclick="$('#nc-sub').click()">🖼️ Subir foto</button></div>
+    <input type="file" id="nc-cam" accept="image/*" capture="environment" hidden onchange="subirFotoNuevo(this)">
+    <input type="file" id="nc-sub" accept="image/*" hidden onchange="subirFotoNuevo(this)">
+    ${sup ? `<label style="margin-top:14px">⭐ Precios especiales <small>(opcional, por producto)</small></label>
+      <div id="nc-pe-lista"></div>
+      <div class="grid"><select id="nc-pe-p">${S.productos.filter(p => p.activo).map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select>
+        <input id="nc-pe-v" inputmode="decimal" placeholder="Precio Q"><button class="btn" onclick="agregarPENuevo()">Agregar</button></div>` : ''}
+    <label style="margin-top:14px">Notas</label><textarea id="nc-notas" placeholder="Cualquier dato útil sobre este cliente"></textarea>
+    <div class="fila-btn"><button class="btn verde" onclick="guardarNuevoCliente()">Guardar cliente</button><button class="btn sec" onclick="S._ncVolver()">Cancelar</button></div>`);
+}
+function pintarPENuevo(){
+  const box = $('#nc-pe-lista'); if(!box) return;
+  box.innerHTML = S._ncPE.map((pe, i) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+    <span>${esc(nomProd(pe.producto_id))}: <b>${Q(pe.precio)}</b></span>
+    <button class="btn mini rojo" onclick="S._ncPE.splice(${i},1);pintarPENuevo()">Quitar</button></div>`).join('') || '<p class="peq">Sin precios especiales todavía.</p>';
+}
+function agregarPENuevo(){
+  const pid = $('#nc-pe-p').value, precio = r2(num($('#nc-pe-v').value));
+  if(precio <= 0) return toast('Escribe un precio válido', 'warn');
+  S._ncPE = S._ncPE.filter(x => x.producto_id !== pid).concat([{producto_id:pid, precio}]);
+  $('#nc-pe-v').value = ''; pintarPENuevo();
+}
+async function subirFotoNuevo(input){
+  const file = input.files && input.files[0]; if(!file) return;
+  if(!navigator.onLine){ toast('Subir fotos requiere internet', 'warn'); return; }
+  toast('Subiendo foto…');
+  try{
+    const blob = await comprimir(file), path = `${S._ncId}/${Date.now()}.jpg`;
+    const up = await sb.storage.from('fotos-clientes').upload(path, blob, {contentType:'image/jpeg', upsert:false});
+    if(up.error) throw up.error;
+    S._ncFoto = sb.storage.from('fotos-clientes').getPublicUrl(path).data.publicUrl;
+    const prev = $('#nc-foto-prev'); if(prev) prev.innerHTML = `<img src="${esc(S._ncFoto)}" alt="Foto del lugar" style="width:100%;max-height:200px;object-fit:cover;border-radius:12px">`;
+    toast('Foto lista ✔');
+  }catch(e){ toast('No se pudo subir la foto: ' + errMsg(e), 'err'); }
 }
 async function guardarNuevoCliente(){
   const nombre = $('#nc-n').value.trim(), dir = $('#nc-d').value.trim();
   if(!nombre || !dir){ toast('Escribe el nombre y la dirección corta', 'warn'); return; }
   if(!navigator.onLine){ toast('Crear clientes requiere internet', 'warn'); return; }
-  const obj = {id:uuid(), nombre, direccion_corta:dir, direccion_completa:$('#nc-dc').value.trim() || null, telefono:$('#nc-t').value.trim() || null, nit:$('#nc-nit').value.trim() || null,
+  const ubi = parseUbicacion($('#nc-ubi').value);
+  const obj = {id:S._ncId, nombre, direccion_corta:dir, direccion_completa:$('#nc-dc').value.trim() || null, telefono:$('#nc-t').value.trim() || null, nit:$('#nc-nit').value.trim() || null,
                ruta_id:$('#nc-ruta').value || null, dia_semana:+$('#nc-dia').value || null, zona:$('#nc-z').value.trim() || null,
-               frecuencia:$('#nc-frec').value.trim() || null, notas:$('#nc-notas').value.trim() || null, estado:'activo'};
+               frecuencia:$('#nc-frec').value.trim() || null, notas:$('#nc-notas').value.trim() || null, estado:'activo', foto_url:S._ncFoto || null,
+               lat: ubi && ubi.lat != null ? ubi.lat : null, lng: ubi && ubi.lat != null ? ubi.lng : null, maps_link: ubi ? ubi.link : null};
   const {data, error} = await sb.from('clientes').insert(obj).select(COLS_CLIENTE).single();
   if(error){ toast(error.code === '23505' ? 'Ya existe un cliente con esa dirección corta' : errMsg(error), 'err'); return; }
+  if(S._ncPE.length){
+    const {error:e2} = await sb.from('precios_cliente').insert(S._ncPE.map(pe => ({cliente_id:data.id, producto_id:pe.producto_id, precio_especial:pe.precio})));
+    if(e2) toast('Cliente creado, pero los precios especiales no se guardaron: ' + errMsg(e2), 'warn');
+    else S._ncPE.forEach(pe => S.pc[data.id+'|'+pe.producto_id] = pe.precio);
+  }
   S.clientes.push(data); S.cmap[data.id] = data; tocarClienteLocal(data.id, {});
   toast('Cliente creado ✔'); S._ncCb(data);
 }
@@ -1170,6 +1217,15 @@ function parseUbicacion(t){
   if(lat === null && !link) return null;
   if(lat !== null && !link) link = `https://www.google.com/maps?q=${lat},${lng}`;
   return {lat, lng, link};
+}
+// Toma la ubicación GPS del teléfono (útil cuando se está parado frente a la casa del cliente)
+function usarUbicacionActual(inputId){
+  if(!navigator.geolocation){ toast('Tu navegador no permite obtener la ubicación', 'warn'); return; }
+  toast('Obteniendo tu ubicación…');
+  navigator.geolocation.getCurrentPosition(
+    pos => { const i = $('#'+inputId); if(i) i.value = pos.coords.latitude.toFixed(6) + ', ' + pos.coords.longitude.toFixed(6); toast('Ubicación capturada ✔'); },
+    err => toast('No se pudo obtener tu ubicación: ' + (err.code === 1 ? 'permiso denegado' : 'revisa el GPS del teléfono'), 'err'),
+    {enableHighAccuracy:true, timeout:10000});
 }
 function urlMapa(c){
   if(c.lat != null && c.lng != null) return `https://www.google.com/maps/search/?api=1&query=${c.lat},${c.lng}`;
@@ -1270,6 +1326,7 @@ async function abrirFicha(cid){
       <p class="peq">${c.lat != null ? `Coordenadas: ${c.lat}, ${c.lng}` : 'Sin coordenadas guardadas.'} ${c.maps_link ? `· <a href="${esc(c.maps_link)}" target="_blank" rel="noopener">link guardado</a>` : ''}</p>
       ${ubi ? `<label for="f-ubi">Coordenadas o link de Google Maps</label>
         <input id="f-ubi" placeholder="14.6349, -90.5069   o   https://maps.app.goo.gl/…" autocomplete="off">
+        <div class="fila-btn"><button class="btn mini" onclick="usarUbicacionActual('f-ubi')">📍 Usar mi ubicación actual</button></div>
         <div class="fila-btn"><button class="btn verde" onclick="guardarUbicacion()">Guardar ubicación</button>
         <button class="btn" onclick="abrirMapa()">🗺️ Abrir en Google Maps</button></div>
         <details class="ayuda"><summary>Cómo capturar coordenadas</summary>
@@ -1345,7 +1402,7 @@ function pintarCorregirVenta(){
   const total = r2(Object.entries(CV.cart).reduce((a,[pid,q]) => a + q * cvPrecio(pid), 0));
   modal(`<div class="mh"><h2>✏️ Corregir venta</h2><button class="btn mini sec" onclick="cerrarModal()">✕ Cerrar</button></div>
     <p class="peq">${fmtFecha(CV.venta.fecha)} · ${esc(c ? c.direccion_corta : 'Mostrador')}${c ? ' · '+esc(c.nombre) : ''}</p>
-    <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" ${CV.mayoreo?'checked':''} onchange="CV.mayoreo=this.checked;pintarCorregirVenta()"> 💰 Precio de mayorista <small>(solo afecta productos nuevos que agregues aquí)</small></label>
+    ${S.rol !== 'repartidor' ? `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" ${CV.mayoreo?'checked':''} onchange="CV.mayoreo=this.checked;pintarCorregirVenta()"> 💰 Precio de mayorista <small>(solo afecta productos nuevos que agregues aquí)</small></label>` : ''}
     <label>Productos <small>(toca para sumar 1 · ⭐ = precio especial de este cliente)</small></label>
     <div class="prods">${lista.map(p => { const q = CV.cart[p.id] || 0, ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro, esp = tienePrecioEspecial(p.id, CV.venta.cliente_id);
       return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn" onclick="cvMas('${p.id}',1)"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b><small>${Q(cvPrecio(p.id))}${esp ? ' ⭐' : ''}</small></div>
@@ -1502,7 +1559,7 @@ function pintarWA(){
     cliHtml = (W.cand.length ? `<p class="aviso" style="margin:6px 0"><b>Elige el cliente correcto</b> (dirección detectada: “${esc(W.dir)}”)</p>
         <div class="res-lista">${W.cand.map((x, i) => `<div class="res-item" onclick="W.sel=W.cand[${i}].c;pintarWA()"><b>${esc(x.c.direccion_corta)}</b> · ${esc(x.c.nombre)} <span class="badge">${x.s}%</span></div>`).join('')}</div>`
       : `<p class="aviso" style="margin:6px 0">No encontré un cliente para “${esc(W.dir) || '(sin dirección)'}”.</p>`) +
-      `<div class="fila-btn"><button class="btn sec" onclick="formNuevoCliente(W.dir, c => { W.sel = c; ir('clientes'); setTimeout(() => { $('#wa-res').innerHTML=''; abrirVenta({cliente:c, cart:waCart()}); }, 50); }, () => ir('clientes'))">+ Crear cliente nuevo con “${esc(W.dir) || 'esta dirección'}”</button></div>`;
+      `<div class="fila-btn"><button class="btn sec" onclick="formNuevoCliente(W.dir, c => { W.sel = c; cerrarModal(); ir('clientes'); setTimeout(() => { $('#wa-res').innerHTML=''; abrirVenta({cliente:c, cart:waCart()}); }, 50); }, () => { cerrarModal(); ir('clientes'); })">+ Crear cliente nuevo con “${esc(W.dir) || 'esta dirección'}”</button></div>`;
   }
   $('#wa-res').innerHTML = `<h3 style="margin-top:14px">Esto entendí</h3>${lin}
     <button class="btn mini sec" onclick="W.lineas.push({cant:1,clave:'',valor:null,pid:null,asumido:false});pintarWA()">+ Agregar producto</button>
