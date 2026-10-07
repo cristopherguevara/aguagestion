@@ -1,10 +1,11 @@
 /* AquaGestión · service worker: permite abrir la app sin internet.
    Guarda index.html y la librería de Supabase. NUNCA guarda llamadas a la API. */
-const CACHE = 'aquagestion-v1';
+const CACHE = 'aquagestion-v2';
 const CDN = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all([
-    c.add('./'), c.add('./index.html'),
+    c.add('./'), c.add('./index.html'), c.add('./manifest.json'),
+    c.add('./icon-192.png'), c.add('./icon-512.png'), c.add('./icon-maskable-512.png'), c.add('./apple-touch-icon.png'),
     fetch(CDN, {mode:'no-cors'}).then(r => c.put(CDN, r)).catch(() => {})
   ])).then(() => self.skipWaiting()));
 });

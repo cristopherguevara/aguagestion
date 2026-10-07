@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b6e79">
 <title>AquaGestión · Purificadora</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AquaGestión">
 <!--
   =====================================================================
    AQUAGESTIÓN  –  index.html  (un solo archivo: HTML + CSS + JS)
@@ -1124,7 +1131,7 @@ async function pintarBusqueda(){
 function formNuevoCliente(dir, cb, volver){
   S._ncCb = cb; S._ncVolver = volver || cerrarModal;
   S._ncId = uuid(); S._ncFoto = null; S._ncPE = [];   // precios especiales que se agreguen aquí, antes de guardar
-  const sup = S.rol === 'supervisor';   // igual que en la ficha: los precios especiales solo los controla el supervisor
+  const sup = S.rol === 'supervisor' || S.rol === 'repartidor';   // igual que en la ficha: supervisor y repartidor asignan precios especiales
   modal(`<div class="mh"><h2>Cliente nuevo</h2><button class="btn mini sec" onclick="S._ncVolver()">✕ Cerrar</button></div>
     <label>Nombre *</label><input id="nc-n" autocomplete="off">
     <label>Dirección corta * <small>(ej. 10 calle A 12-25)</small></label><input id="nc-d" value="${esc(dir||'')}" autocomplete="off">
@@ -1299,6 +1306,7 @@ async function abrirFicha(cid){
   if(!c){ cerrarModal(); return toast('No encontré al cliente', 'err'); }
   S.fc = c;
   const sup = S.rol === 'supervisor', ubi = sup || S.rol === 'repartidor';
+  const pePermitido = sup || S.rol === 'repartidor';   // precios especiales: supervisor y repartidor los asignan
   const campo = (lab, id, val, tipo = 'text') => sup ? `<label for="${id}">${lab}</label><input id="${id}" type="${tipo}" value="${esc(val ?? '')}">`
                                                    : `<label>${lab}</label><div class="ro">${esc(val || '—')}</div>`;
   const rutaN = (S.rutas.find(r => r.id === c.ruta_id) || {}).nombre || '—';
@@ -1349,9 +1357,9 @@ async function abrirFicha(cid){
     <div class="card"><h3>🛢️ Garrafones prestados</h3><div class="total-grande" style="text-align:left;margin:0">${c.garrafones_prestados || 0}</div>
       ${sup ? `<label for="f-prest">Corregir saldo manualmente</label><div style="display:flex;gap:8px"><input id="f-prest" inputmode="numeric" value="${c.garrafones_prestados||0}"><button class="btn" onclick="guardarSaldoTambos()">Guardar</button></div>` : ''}</div>
 
-    ${(espec.length || sup) ? `<div class="card"><h3>⭐ Precios especiales</h3>
-      ${espec.map(([k, v]) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--borde)"><span>${esc(nomProd(k.split('|')[1]))}: <b>${Q(v)}</b></span>${sup ? `<button class="btn mini rojo" onclick="quitarPE('${k.split('|')[1]}')">Quitar</button>` : ''}</div>`).join('') || '<p class="peq">Sin precios especiales.</p>'}
-      ${sup ? `<div class="grid" style="margin-top:8px"><select id="pe-p">${S.productos.filter(p => p.activo).map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select><input id="pe-v" inputmode="decimal" placeholder="Precio Q"><button class="btn" onclick="agregarPE()">Agregar</button></div>` : ''}</div>` : ''}
+    ${(espec.length || pePermitido) ? `<div class="card"><h3>⭐ Precios especiales</h3>
+      ${espec.map(([k, v]) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--borde)"><span>${esc(nomProd(k.split('|')[1]))}: <b>${Q(v)}</b></span>${pePermitido ? `<button class="btn mini rojo" onclick="quitarPE('${k.split('|')[1]}')">Quitar</button>` : ''}</div>`).join('') || '<p class="peq">Sin precios especiales.</p>'}
+      ${pePermitido ? `<div class="grid" style="margin-top:8px"><select id="pe-p">${S.productos.filter(p => p.activo).map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select><input id="pe-v" inputmode="decimal" placeholder="Precio Q"><button class="btn" onclick="agregarPE()">Agregar</button></div>` : ''}</div>` : ''}
 
     <div class="card"><h3>📒 Estado de cuenta (créditos pendientes)</h3>
       ${cxc.length ? `<div class="tabla-wrap"><table class="tabla"><tbody>${cxc.map(x => `<tr><td>${fmtFecha(x.fecha)}</td><td class="n">${Q(x.total_q)}</td>${sup ? `<td class="n"><button class="btn mini verde" onclick="pagarDesdeFicha('${x.id}')">Marcar pagada</button></td>` : ''}</tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td class="n">${Q(totCxc)}</td>${sup ? '<td></td>' : ''}</tr></tfoot></table></div>` : '<p class="peq">Sin créditos pendientes ✔</p>'}</div>
