@@ -237,6 +237,9 @@ const S = {
 };
 const VISTAS = {};           // cada pantalla se registra aquí (partes 2 a 5)
 const DIAS = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+// Frecuencia de visita: valores fijos (no texto libre) para poder calcular cumplimiento
+const FRECUENCIAS = [['diario','Diario'],['varios_dias_semana','Varios días a la semana'],['semanal','Cada semana'],['quincenal','Cada 15 días'],['mensual','Cada mes']];
+const frecLabel = v => (FRECUENCIAS.find(f => f[0] === v) || [,'Sin frecuencia'])[1];
 
 // ---------- Utilidades ----------
 const $  = (s, r=document) => r.querySelector(s);
@@ -251,6 +254,29 @@ const hoy = () => new Date().toLocaleDateString('en-CA', {timeZone:ZONA});      
 const diaSem = f => { const [y,m,d] = f.split('-').map(Number); return ((new Date(y,m-1,d).getDay()+6)%7)+1; }; // 1=lun..7=dom
 const difDias = f => Math.round((Date.parse(hoy()) - Date.parse(f)) / 864e5);
 const fmtFecha = f => { if(!f) return '—'; const [y,m,d] = f.split('-'); return `${d}/${m}/${y}`; };
+// Días de ruta del cliente: usa el arreglo nuevo; si está vacío cae al campo viejo (clientes importados o no editados aún)
+const diasCliente = c => (c.dias_semana && c.dias_semana.length) ? c.dias_semana : (c.dia_semana ? [c.dia_semana] : []);
+const txtDiasCliente = c => { const d = diasCliente(c); return d.length ? d.slice().sort((a,b)=>a-b).map(x => DIAS[x-1].slice(0,3)).join(', ') : 'sin día'; };
+// ¿Le toca a este cliente ser atendido el día "dow" (1=lun..7=dom)?
+// diario: todos los días · varios_dias_semana / cada semana: solo los días marcados, toda semana
+// cada 15 días / cada mes: solo cuando ya pasaron 15 o 30 días desde su último pedido (o si nunca ha comprado)
+function clienteDebeAtender(c, dow){
+  if(c.frecuencia === 'diario') return true;
+  if(!diasCliente(c).includes(dow)) return false;
+  if(c.frecuencia === 'quincenal') return !c.ultima_compra || difDias(c.ultima_compra) >= 15;
+  if(c.frecuencia === 'mensual')   return !c.ultima_compra || difDias(c.ultima_compra) >= 30;
+  return true;   // diario ya se resolvió arriba; varios_dias_semana, semanal o sin frecuencia: el día marcado basta
+}
+// Agrupa los clientes por día de la semana (1..7) para las pantallas de ruta.
+// Un cliente "diario" aparece en los 7 días; los demás, solo en los días que tienen marcados.
+function construirPorDia(clientes){
+  const porDia = {1:[],2:[],3:[],4:[],5:[],6:[],7:[]};
+  clientes.forEach(c => {
+    if(c.frecuencia === 'diario'){ for(let d=1; d<=7; d++) porDia[d].push(c); return; }
+    diasCliente(c).forEach(d => { if(porDia[d]) porDia[d].push(c); });
+  });
+  return porDia;
+}
 const haceTxt = f => { if(!f) return 'sin pedidos'; const d = difDias(f); return d<=0 ? 'hoy' : d===1 ? 'ayer' : `hace ${d} d`; };
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() :
   'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random()*16|0; return (c==='x'?r:(r&3|8)).toString(16); }));
@@ -355,9 +381,9 @@ async function entrarApp(){
    NAVEGACIÓN
    --------------------------------------------------------------------- */
 const NAV = {
-  tienda:    [['inicio','🏠','Inicio'],['vender','➕','Vender'],['clientes','🔎','Clientes'],['gastos','💸','Gastos'],['prod','🏭','Producción']],
+  tienda:    [['inicio','🏠','Inicio'],['vender','➕','Vender'],['clientes','🔎','Clientes'],['tambos','🛢️','Tambos'],['gastos','💸','Gastos'],['prod','🏭','Producción']],
   repartidor:[['inicio','🗓️','Ruta'],['clientes','🔎','Clientes'],['tambos','🛢️','Tambos'],['gastos','💸','Gastos'],['liq','✅','Liquidar']],
-  supervisor:[['inicio','📊','Panel'],['vender','➕','Vender'],['clientes','🔎','Clientes'],['er','📈','Resultados'],['gastos','💸','Gastos'],['prod','🏭','Prod/Inv'],['precios','🏷️','Precios'],['usuarios','👥','Usuarios'],['importar','📥','Importar']]
+  supervisor:[['inicio','📊','Panel'],['vender','➕','Vender'],['clientes','🔎','Clientes'],['tambos','🛢️','Tambos'],['er','📈','Resultados'],['gastos','💸','Gastos'],['prod','🏭','Prod/Inv'],['precios','🏷️','Precios'],['usuarios','👥','Usuarios'],['importar','📥','Importar']]
 };
 function pintarNav(){
   $('#nav').innerHTML = NAV[S.rol].map(([id,ic,tx]) =>
@@ -382,7 +408,7 @@ async function ir(v){
 /* ---------------------------------------------------------------------
    CACHÉ DE DATOS BASE (localStorage) – buscador instantáneo y modo offline
    --------------------------------------------------------------------- */
-const COLS_CLIENTE = 'id,nombre,direccion_corta,direccion_completa,telefono,zona,ruta_id,dia_semana,lat,lng,maps_link,foto_url,garrafones_prestados,nit,ultima_compra,estado,frecuencia,promedio_q,notas';
+const COLS_CLIENTE = 'id,nombre,direccion_corta,direccion_completa,telefono,zona,ruta_id,dia_semana,dias_semana,lat,lng,maps_link,foto_url,garrafones_prestados,nit,ultima_compra,estado,frecuencia,promedio_q,notas';
 
 function aplicarBase(b){
   S.base = b;
@@ -579,12 +605,11 @@ async function agregarNitRapido(){
 }
 function vTipo(){
   const b = $('#v-tipo');
-  // Solo tienda y supervisor pueden elegir precio de mayorista a la hora de vender; el repartidor no,
-  // para que el precio de cada cliente quede definido de antemano (precio especial en su ficha) y no a su criterio.
-  const mayoreoHtml = S.rol === 'repartidor' ? '' : `<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-weight:600">
+  // Tienda, repartidor y supervisor pueden elegir precio de mayorista a la hora de vender.
+  const mayoreoHtml = `<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-weight:600">
       <input type="checkbox" ${V.mayoreo?'checked':''} onchange="V.mayoreo=this.checked;vProd();vTot()"> 💰 Precio de mayorista</label>
     <p class="peq" style="margin:2px 0 0">Si el producto no tiene precio de mayorista, se usa el normal.</p>`;
-  if(S.rol === 'repartidor'){ b.innerHTML = ''; return; }
+  if(S.rol === 'repartidor'){ b.innerHTML = mayoreoHtml; return; }
   b.innerHTML = `<label>Tipo de venta</label><div class="seg">
     <button class="${V.tipo==='tienda'?'on':''}" onclick="V.tipo='tienda';vProd();vTipo();vTot()">🏪 Tienda</button>
     <button class="${V.tipo==='domicilio'?'on':''}" onclick="V.tipo='domicilio';vProd();vTipo();vTot()">🛵 Domicilio</button></div>
@@ -844,12 +869,10 @@ async function dashRepartidor(){
   const vis = new Set((r ? r.ventas : []).map(x => x.cliente_id));
   ls.get('cola', []).forEach(op => { if(op.k === 'venta' && op.venta.fecha === f) vis.add(op.venta.cliente_id); });
   S.visitados = vis; S.soloMiRuta = S.soloMiRuta || false;
-  const porDia = {1:[],2:[],3:[],4:[],5:[],6:[],7:[]};
-  S.clientes.forEach(c => { if(porDia[c.dia_semana]) porDia[c.dia_semana].push(c); });
-  S.porDia = porDia;
+  S.porDia = construirPorDia(S.clientes);
   $('#vista').innerHTML = `
     <div class="dias">${DIAS.map((n, i) => {
-      const d = i + 1, lst = porDia[d], est = lst.reduce((a,c) => a + (+c.promedio_q || 0), 0);
+      const d = i + 1, lst = S.porDia[d], est = lst.reduce((a,c) => a + (+c.promedio_q || 0), 0);
       return `<button class="dia ${d===hoyDia?'hoy':''} ${d===S.diaSel?'sel':''}" onclick="S.diaSel=${d};pintarDia()">
         <div class="dn"><span class="c">${n.slice(0,3)}</span><span class="l">${n}</span></div>
         <div class="dc">${lst.length}</div><div class="de">≈ ${Q(est).replace('Q ','Q')}</div></button>`;
@@ -874,19 +897,65 @@ function pintarDia(){
   const misRutas = S.rutas.filter(r => r.repartidor_id === S.user.id).map(r => r.id);
   let lst = S.porDia[d].slice();
   if(S.soloMiRuta && misRutas.length) lst = lst.filter(c => misRutas.includes(c.ruta_id));
-  lst.sort((a,b) => (S.visitados.has(a.id) - S.visitados.has(b.id)) || a.direccion_corta.localeCompare(b.direccion_corta, 'es', {numeric:true}));
-  const hechos = lst.filter(c => S.visitados.has(c.id)).length;
+  // "Debe" = según su frecuencia, a este cliente le toca ser atendido este día (no solo tener el día marcado:
+  // los de cada 15 días / cada mes solo cuentan cuando ya les toca según su último pedido).
+  const debe = c => clienteDebeAtender(c, d);
+  lst.sort((a,b) => (S.visitados.has(a.id) - S.visitados.has(b.id)) || (debe(b) - debe(a)) || a.direccion_corta.localeCompare(b.direccion_corta, 'es', {numeric:true}));
+  const debidos = lst.filter(debe), hechos = debidos.filter(c => S.visitados.has(c.id)).length;
   $('#det-dia').innerHTML = `<div class="mh"><h2>${DIAS[d-1]}${d===hoyDia?' (hoy)':''} · ${lst.length} clientes</h2>
       <label style="margin:0;display:flex;gap:6px;align-items:center;font-weight:600"><input type="checkbox" ${S.soloMiRuta?'checked':''} ${misRutas.length?'':'disabled'} onchange="S.soloMiRuta=this.checked;pintarDia()"> Solo mi ruta</label></div>
-    ${d===hoyDia ? `<p class="peq">Visitados hoy: <b>${hechos}</b> de ${lst.length}</p>` : ''}
-    ${lst.length ? lst.map(c => `<div class="cli-fila ${S.visitados.has(c.id)?'hecho':''}">
+    ${d===hoyDia ? `<p class="peq">Programados hoy: <b>${debidos.length}</b> · Atendidos: <b class="pos">${hechos}</b> · Sin atender: <b class="${debidos.length-hechos?'neg':''}">${debidos.length-hechos}</b></p>` : ''}
+    ${lst.length ? lst.map(c => { const ledebe = debe(c), vis = S.visitados.has(c.id);
+      const estadoTxt = vis ? '✅ Atendido' : ledebe ? '⏳ Pendiente' : '· no le toca aún';
+      return `<div class="cli-fila ${vis?'hecho':''}">
       ${c.foto_url ? `<img class="thumb" src="${esc(c.foto_url)}" alt="" loading="lazy">` : '<div class="thumb">🏠</div>'}
-      <div class="cli-info"><b>${esc(c.direccion_corta)} ${S.visitados.has(c.id)?'✅':''}</b>${esc(c.nombre)}<br>
+      <div class="cli-info"><b>${esc(c.direccion_corta)}</b> <small>${estadoTxt}</small><br>${esc(c.nombre)}<br>
         <small>Último pedido: ${haceTxt(c.ultima_compra)} · 🛢️ prestados: <b>${c.garrafones_prestados||0}</b></small></div>
       <div style="display:flex;flex-direction:column;gap:6px">
         <button class="btn" onclick="abrirVenta({cliente:S.cmap['${c.id}']})">Registrar pedido</button>
-        <button class="btn mini sec" onclick="repetirDesde('${c.id}')">🔁 Repetir</button></div></div>`).join('')
+        <button class="btn mini sec" onclick="repetirDesde('${c.id}')">🔁 Repetir</button></div></div>`; }).join('')
       : '<p class="peq">No hay clientes asignados a este día.</p>'}`;
+}
+
+/* ---------------------------------------------------------------------
+   GRÁFICA DE BARRAS (SVG, sin librerías) — compara hasta 3 años por mes.
+   datos: {anio-mes: monto}; anios: [año-2, año-1, año actual]
+   --------------------------------------------------------------------- */
+const MESES3 = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+const COLOR_ANIO = ['#2a78d6', '#eb6834', '#1baf7a'];   // paleta categórica: azul, naranja, aqua (válida para 3 series)
+const Qcorta = n => { n = Number(n) || 0; return n >= 1000 ? 'Q' + (n/1000).toLocaleString('es-GT', {maximumFractionDigits:1}) + 'k' : 'Q' + Math.round(n); };
+// Camino de una barra con esquina superior redondeada (4px), cuadrada en la base.
+function barraPath(x, y, w, h, r){
+  if(h <= 0) return '';
+  r = Math.min(r, w/2, h);
+  return `M${x},${y+h} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
+}
+function graficaBarrasComparativo(datos, anios, titulo, unidad){
+  const W = 760, H = 230, padI = 44, padD = 10, padT = 10, padB = 28;
+  const anchoG = W - padI - padD, altoG = H - padT - padB;
+  let max = 0; MESES3.forEach((_, i) => anios.forEach(a => { max = Math.max(max, datos[a+'-'+(i+1)] || 0); }));
+  max = max <= 0 ? 1 : max;
+  // Techo "limpio" para el eje (1, 2, 2.5, 5 × 10^n)
+  const pot = Math.pow(10, Math.floor(Math.log10(max)));
+  const techo = [1,2,2.5,5,10].map(m => m*pot).find(t => t >= max) || Math.ceil(max/pot)*pot;
+  const yDe = v => padT + altoG - (v/techo)*altoG;
+  const grupoW = anchoG / 12, gap = 2, barW = Math.min(20, (grupoW - 8 - (anios.length-1)*gap) / anios.length);
+  const ticks = [0, .25, .5, .75, 1].map(f => techo*f);
+  const barras = MESES3.map((_, i) => {
+    const x0 = padI + i*grupoW + (grupoW - (barW*anios.length + gap*(anios.length-1)))/2;
+    return anios.map((a, k) => {
+      const v = datos[a+'-'+(i+1)] || 0, x = x0 + k*(barW+gap), h = (v/techo)*altoG, y = padT + altoG - h;
+      return v > 0 ? `<path d="${barraPath(x,y,barW,h,4)}" fill="${COLOR_ANIO[k]}"><title>${MESES3[i]} ${a}: ${Q(v)}</title></path>` : '';
+    }).join('');
+  }).join('');
+  const ejeX = MESES3.map((n,i) => `<text x="${padI+i*grupoW+grupoW/2}" y="${H-10}" text-anchor="middle" font-size="11" fill="var(--gris)">${n}</text>`).join('');
+  const ejeY = ticks.map(t => `<line x1="${padI}" y1="${yDe(t)}" x2="${W-padD}" y2="${yDe(t)}" stroke="#e5e7eb" stroke-width="1"/>
+      <text x="${padI-6}" y="${yDe(t)+3}" text-anchor="end" font-size="10" fill="var(--gris)">${Qcorta(t)}</text>`).join('');
+  const leyenda = anios.map((a,k) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px"><span style="width:11px;height:11px;border-radius:3px;background:${COLOR_ANIO[k]};display:inline-block"></span>${a}</span>`).join('');
+  return `<div class="card"><h3>${titulo}</h3>
+    <div style="margin:4px 0 8px">${leyenda}</div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="${titulo}, comparativo por mes de ${anios.join(', ')}">${ejeY}${barras}${ejeX}</svg>
+    ${unidad ? `<p class="peq">${unidad}</p>` : ''}</div>`;
 }
 
 /* ---------------------------------------------------------------------
@@ -897,10 +966,11 @@ async function dashSupervisor(){
   const F = S.fil = S.fil || {desde:hoy(), hasta:hoy(), ruta:'', usuario:'', forma:''};
   const args = {p_desde:F.desde, p_hasta:F.hasta, p_usuario:F.usuario || null, p_forma:F.forma || null, p_ruta:F.ruta || null};
   const anio = +F.hasta.slice(0,4);
-  const [tot, prods, gastos, comp, cxc, cierres, vlist, vis, correcciones] = await Promise.all([
+  const [tot, prods, gastos, comp, compG, cxc, cierres, vlist, vis, correcciones] = await Promise.all([
     rpc('rpt_totales', args), rpc('rpt_ventas_producto', args),
     rpc('rpt_gastos', {p_desde:F.desde, p_hasta:F.hasta, p_usuario:F.usuario || null}),
     rpc('rpt_comparativo', {p_anio:anio}),
+    rpc('rpt_comparativo_gastos', {p_anio:anio}),
     sb.from('ventas').select('id,fecha,total_q,cliente_id,usuario_id').eq('estado_credito','pendiente').order('fecha').then(okR),
     sb.from('cierres_diarios').select('*').gte('fecha',F.desde).lte('fecha',F.hasta).order('fecha',{ascending:false}).limit(40).then(okR),
     sb.from('ventas').select('id,fecha,tipo,forma_pago,estado_credito,total_q,cliente_id,usuario_id,notas').gte('fecha',F.desde).lte('fecha',F.hasta)
@@ -913,13 +983,16 @@ async function dashSupervisor(){
   // Ventas por producto: tienda vs reparto
   const pv = {};
   prods.forEach(p => { const x = pv[p.producto] || (pv[p.producto] = {t:{u:0,q:0}, d:{u:0,q:0}}); const k = p.tipo === 'tienda' ? 't' : 'd'; x[k].u += +p.unidades; x[k].q += +p.total_q; });
-  // Comparativo por mes
+  // Comparativo por mes (ventas y gastos)
   const A = [anio-2, anio-1, anio], cm = {}; comp.forEach(c => cm[c.anio+'-'+c.mes] = +c.total_q);
   const totAnio = A.map(a => r2([1,2,3,4,5,6,7,8,9,10,11,12].reduce((s,m) => s + (cm[a+'-'+m] || 0), 0)));
-  // Visitados vs faltantes (día = fecha "Hasta")
+  const cmG = {}; (compG || []).forEach(c => cmG[c.anio+'-'+c.mes] = +c.total_q);
+  const totAnioG = A.map(a => r2([1,2,3,4,5,6,7,8,9,10,11,12].reduce((s,m) => s + (cmG[a+'-'+m] || 0), 0)));
+  // Visitados vs faltantes y % de cumplimiento (día = fecha "Hasta")
   const dow = diaSem(F.hasta), visitSet = new Set(vis.map(x => x.cliente_id));
-  const esperados = S.clientes.filter(c => c.dia_semana === dow && (!F.ruta || c.ruta_id === F.ruta));
+  const esperados = S.clientes.filter(c => clienteDebeAtender(c, dow) && (!F.ruta || c.ruta_id === F.ruta));
   const faltan = esperados.filter(c => !visitSet.has(c.id));
+  const cumplimiento = esperados.length ? Math.round((esperados.length - faltan.length) / esperados.length * 100) : 100;
   // Filtro de ruta en listas (lado cliente)
   const vl = F.ruta ? vlist.filter(v => v.cliente_id && (S.cmap[v.cliente_id] || {}).ruta_id === F.ruta) : vlist;
   S.vl = vl; S.cierresL = cierres;
@@ -975,12 +1048,21 @@ async function dashSupervisor(){
       </tbody></table></div></div>
 
     <div class="card"><h3>Clientes visitados vs faltantes · ${DIAS[dow-1]} ${fmtFecha(F.hasta)}</h3>
-      <div class="grid"><div class="kpi"><small>Programados</small><b>${esperados.length}</b></div><div class="kpi"><small>Visitados</small><b class="pos">${esperados.length - faltan.length}</b></div><div class="kpi"><small>Faltantes</small><b class="${faltan.length?'neg':''}">${faltan.length}</b></div></div>
+      <div class="grid"><div class="kpi"><small>Programados</small><b>${esperados.length}</b></div><div class="kpi"><small>Visitados</small><b class="pos">${esperados.length - faltan.length}</b></div><div class="kpi"><small>Faltantes</small><b class="${faltan.length?'neg':''}">${faltan.length}</b></div>
+        <div class="kpi"><small>% Cumplimiento</small><b class="${cumplimiento>=80?'pos':cumplimiento>=50?'':'neg'}">${cumplimiento}%</b></div></div>
+      <p class="peq">Un cliente cuenta como "programado" según su frecuencia: diario siempre, los de día(s) marcado(s) cada semana, y los de 15/30 días solo cuando ya les toca.</p>
       ${faltan.length ? `<details class="ayuda"><summary>Ver faltantes</summary>${faltan.map(c => `<div>${esc(c.direccion_corta)} · ${esc(c.nombre)}</div>`).join('')}</details>` : ''}</div>
+
+    ${graficaBarrasComparativo(cm, A, `📈 Venta total por mes · ${A[0]} vs ${A[1]} vs ${A[2]}`)}
+    ${graficaBarrasComparativo(cmG, A, `📉 Gastos por mes · ${A[0]} vs ${A[1]} vs ${A[2]}`)}
 
     <div class="card"><h3>Comparativo de ventas ${A[0]} · ${A[1]} · ${A[2]}</h3><div class="tabla-wrap"><table class="tabla"><thead><tr><th>Mes</th>${A.map(a => `<th class="n">${a}</th>`).join('')}</tr></thead><tbody>
       ${['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'].map((n,i) => `<tr><td>${n}</td>${A.map(a => `<td class="n">${cm[a+'-'+(i+1)] ? Q(cm[a+'-'+(i+1)]) : '—'}</td>`).join('')}</tr>`).join('')}
       </tbody><tfoot><tr><td>Total</td>${totAnio.map(t => `<td class="n">${Q(t)}</td>`).join('')}</tr></tfoot></table></div></div>
+
+    <div class="card"><h3>Comparativo de gastos ${A[0]} · ${A[1]} · ${A[2]}</h3><div class="tabla-wrap"><table class="tabla"><thead><tr><th>Mes</th>${A.map(a => `<th class="n">${a}</th>`).join('')}</tr></thead><tbody>
+      ${['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'].map((n,i) => `<tr><td>${n}</td>${A.map(a => `<td class="n">${cmG[a+'-'+(i+1)] ? Q(cmG[a+'-'+(i+1)]) : '—'}</td>`).join('')}</tr>`).join('')}
+      </tbody><tfoot><tr><td>Total</td>${totAnioG.map(t => `<td class="n">${Q(t)}</td>`).join('')}</tr></tfoot></table></div></div>
 
     <div class="card no-print"><h3>Cierres diarios del período</h3><div class="tabla-wrap"><table class="tabla"><thead><tr><th>Fecha</th><th>Usuario</th><th class="n">Esperado</th><th class="n">Confirmado</th><th class="n">Dif.</th><th>Estado</th><th></th></tr></thead><tbody>
       ${cierres.map(c => `<tr><td>${fmtFecha(c.fecha)}</td><td>${esc(nombreUsuario(c.usuario_id))}</td><td class="n">${Q(c.efectivo_esperado_q)}</td><td class="n">${Q(c.efectivo_confirmado_q)}</td>
@@ -1089,7 +1171,7 @@ function cardCliente(c){
     <div style="display:flex;gap:10px">
       ${c.foto_url ? `<img class="thumb" src="${esc(c.foto_url)}" alt="" loading="lazy">` : '<div class="thumb">🏠</div>'}
       <div class="cli-info"><b>${esc(c.direccion_corta)}</b>${esc(c.nombre)}<br>
-        <small>${c.telefono ? `☎ <a href="tel:${esc(c.telefono)}">${esc(c.telefono)}</a> · ` : ''}🛢️ prestados: <b>${c.garrafones_prestados||0}</b> · último pedido: ${haceTxt(c.ultima_compra)} · ruta: ${c.dia_semana ? DIAS[c.dia_semana-1] : 'sin día'}</small>
+        <small>${c.telefono ? `☎ <a href="tel:${esc(c.telefono)}">${esc(c.telefono)}</a> · ` : ''}🛢️ prestados: <b>${c.garrafones_prestados||0}</b> · último pedido: ${haceTxt(c.ultima_compra)} · ruta: ${txtDiasCliente(c)}</small>
         ${esp.length ? `<br><small>⭐ Precio especial → ${esp.join(' · ')}</small>` : ''}</div></div>
     <div class="fila-btn"><button class="btn ambar" onclick="repetirDesde('${c.id}')">🔁 Repetir último pedido</button>
       <button class="btn" onclick="abrirVenta({cliente:S.cmap['${c.id}']})">Vender</button>
@@ -1140,8 +1222,8 @@ function formNuevoCliente(dir, cb, volver){
     <label>NIT <small>(opcional, si pide factura)</small></label><input id="nc-nit" autocomplete="off">
     <label>Zona</label><input id="nc-z" placeholder="Zona 1, Mercado…">
     <label>Ruta</label><select id="nc-ruta"><option value="">Sin ruta</option>${S.rutas.map(r => `<option value="${r.id}">${esc(r.nombre)}</option>`).join('')}</select>
-    <label>Día de ruta</label><select id="nc-dia"><option value="">Sin día</option>${DIAS.map((d,i) => `<option value="${i+1}">${d}</option>`).join('')}</select>
-    <label>Frecuencia <small>(opcional, ej. semanal, quincenal)</small></label><input id="nc-frec">
+    <label>Día(s) de ruta <small>(puedes marcar varios)</small></label><div class="seg" style="flex-wrap:wrap">${DIAS.map((d,i) => `<label style="flex:1 0 90px;display:flex;gap:6px;align-items:center;font-weight:600"><input type="checkbox" class="nc-dia-cb" value="${i+1}"> ${d.slice(0,3)}</label>`).join('')}</div>
+    <label>Frecuencia</label><select id="nc-frec"><option value="">Sin frecuencia</option>${FRECUENCIAS.map(([v,l]) => `<option value="${v}">${l}</option>`).join('')}</select>
     <label for="nc-ubi">Ubicación <small>(opcional)</small></label>
     <input id="nc-ubi" placeholder="14.6349, -90.5069   o   link de Google Maps" autocomplete="off">
     <div class="fila-btn"><button class="btn mini" onclick="usarUbicacionActual('nc-ubi')">📍 Usar mi ubicación actual</button></div>
@@ -1187,9 +1269,10 @@ async function guardarNuevoCliente(){
   if(!nombre || !dir){ toast('Escribe el nombre y la dirección corta', 'warn'); return; }
   if(!navigator.onLine){ toast('Crear clientes requiere internet', 'warn'); return; }
   const ubi = parseUbicacion($('#nc-ubi').value);
+  const diasSel = $$('.nc-dia-cb').filter(x => x.checked).map(x => +x.value);
   const obj = {id:S._ncId, nombre, direccion_corta:dir, direccion_completa:$('#nc-dc').value.trim() || null, telefono:$('#nc-t').value.trim() || null, nit:$('#nc-nit').value.trim() || null,
-               ruta_id:$('#nc-ruta').value || null, dia_semana:+$('#nc-dia').value || null, zona:$('#nc-z').value.trim() || null,
-               frecuencia:$('#nc-frec').value.trim() || null, notas:$('#nc-notas').value.trim() || null, estado:'activo', foto_url:S._ncFoto || null,
+               ruta_id:$('#nc-ruta').value || null, dias_semana:diasSel, dia_semana:diasSel[0] || null, zona:$('#nc-z').value.trim() || null,
+               frecuencia:$('#nc-frec').value || null, notas:$('#nc-notas').value.trim() || null, estado:'activo', foto_url:S._ncFoto || null,
                lat: ubi && ubi.lat != null ? ubi.lat : null, lng: ubi && ubi.lat != null ? ubi.lng : null, maps_link: ubi ? ubi.link : null};
   const {data, error} = await sb.from('clientes').insert(obj).select(COLS_CLIENTE).single();
   if(error){ toast(error.code === '23505' ? 'Ya existe un cliente con esa dirección corta' : errMsg(error), 'err'); return; }
@@ -1322,10 +1405,11 @@ async function abrirFicha(cid){
       <label for="f-nit">NIT <small>(para generar comprobante con factura)</small></label>
       <div style="display:flex;gap:8px"><input id="f-nit" value="${esc(c.nit||'')}" placeholder="Ej: 1234567-8 o CF" style="flex:1"><button class="btn" onclick="guardarNit()">Guardar</button></div>
       ${sup ? `<label for="f-ruta">Ruta</label><select id="f-ruta"><option value="">Sin ruta</option>${S.rutas.map(r => `<option value="${r.id}" ${c.ruta_id===r.id?'selected':''}>${esc(r.nombre)}</option>`).join('')}</select>
-        <label for="f-dia">Día de la semana</label><select id="f-dia"><option value="">Sin día</option>${DIAS.map((d,i) => `<option value="${i+1}" ${c.dia_semana===i+1?'selected':''}>${d}</option>`).join('')}</select>
+        <label>Día(s) de la semana <small>(puedes marcar varios)</small></label><div class="seg" style="flex-wrap:wrap">${DIAS.map((d,i) => `<label style="flex:1 0 90px;display:flex;gap:6px;align-items:center;font-weight:600"><input type="checkbox" class="f-dia-cb" value="${i+1}" ${diasCliente(c).includes(i+1)?'checked':''}> ${d.slice(0,3)}</label>`).join('')}</div>
         <label for="f-estado">Estado</label><select id="f-estado">${['activo','inactivo'].map(x => `<option ${c.estado===x?'selected':''}>${x}</option>`).join('')}</select>`
-        : `<label>Ruta</label><div class="ro">${esc(rutaN)}</div><label>Día de la semana</label><div class="ro">${c.dia_semana ? DIAS[c.dia_semana-1] : '—'}</div>`}
-      ${campo('Frecuencia','f-frec',c.frecuencia)}
+        : `<label>Ruta</label><div class="ro">${esc(rutaN)}</div><label>Día(s) de la semana</label><div class="ro">${txtDiasCliente(c)}</div>`}
+      ${sup ? `<label for="f-frec">Frecuencia</label><select id="f-frec"><option value="">Sin frecuencia</option>${FRECUENCIAS.map(([v,l]) => `<option value="${v}" ${c.frecuencia===v?'selected':''}>${l}</option>`).join('')}</select>`
+        : `<label>Frecuencia</label><div class="ro">${esc(frecLabel(c.frecuencia))}</div>`}
       ${sup ? `<label for="f-notas">Notas</label><textarea id="f-notas">${esc(c.notas||'')}</textarea>` : `<label>Notas</label><div class="ro">${esc(c.notas || '—')}</div>`}
       ${sup ? '<div class="fila-btn"><button class="btn verde" onclick="guardarFicha()">Guardar datos</button></div>' : ''}
     </div>
@@ -1370,9 +1454,10 @@ async function abrirFicha(cid){
       <p class="peq">Compras históricas: ${c.compras_historicas ?? '—'} · Promedio: ${Q(c.promedio_q)}</p></div>`);
 }
 async function guardarFicha(){
+  const diasSel = $$('.f-dia-cb').filter(x => x.checked).map(x => +x.value);
   const obj = {nombre:$('#f-nombre').value.trim(), direccion_corta:$('#f-dcorta').value.trim(), direccion_completa:$('#f-dcomp').value.trim() || null,
     telefono:$('#f-tel').value.trim() || null, zona:$('#f-zona').value.trim() || null, ruta_id:$('#f-ruta').value || null,
-    dia_semana:+$('#f-dia').value || null, estado:$('#f-estado').value, frecuencia:$('#f-frec').value.trim() || null, notas:$('#f-notas').value.trim() || null};
+    dias_semana:diasSel, dia_semana:diasSel[0] || null, estado:$('#f-estado').value, frecuencia:$('#f-frec').value || null, notas:$('#f-notas').value.trim() || null};
   if(!obj.nombre || !obj.direccion_corta) return toast('Nombre y dirección corta son obligatorios', 'warn');
   const {error} = await sb.from('clientes').update(obj).eq('id', S.fc.id);
   if(error) return toast(errMsg(error), 'err');
@@ -1410,7 +1495,7 @@ function pintarCorregirVenta(){
   const total = r2(Object.entries(CV.cart).reduce((a,[pid,q]) => a + q * cvPrecio(pid), 0));
   modal(`<div class="mh"><h2>✏️ Corregir venta</h2><button class="btn mini sec" onclick="cerrarModal()">✕ Cerrar</button></div>
     <p class="peq">${fmtFecha(CV.venta.fecha)} · ${esc(c ? c.direccion_corta : 'Mostrador')}${c ? ' · '+esc(c.nombre) : ''}</p>
-    ${S.rol !== 'repartidor' ? `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" ${CV.mayoreo?'checked':''} onchange="CV.mayoreo=this.checked;pintarCorregirVenta()"> 💰 Precio de mayorista <small>(solo afecta productos nuevos que agregues aquí)</small></label>` : ''}
+    <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" ${CV.mayoreo?'checked':''} onchange="CV.mayoreo=this.checked;pintarCorregirVenta()"> 💰 Precio de mayorista <small>(solo afecta productos nuevos que agregues aquí)</small></label>
     <label>Productos <small>(toca para sumar 1 · ⭐ = precio especial de este cliente)</small></label>
     <div class="prods">${lista.map(p => { const q = CV.cart[p.id] || 0, ico = ICONO_CAT[p.categoria] || ICONO_CAT.otro, esp = tienePrecioEspecial(p.id, CV.venta.cliente_id);
       return `<div class="prod ${q?'on':''}" data-cat="${p.categoria}"><div class="pn" onclick="cvMas('${p.id}',1)"><b><span class="cat-ico">${ico}</span>${esc(p.nombre)}</b><small>${Q(cvPrecio(p.id))}${esp ? ' ⭐' : ''}</small></div>
@@ -2392,6 +2477,17 @@ function parseDia(v){
   const s = norm(v); if(!s) return null; if(/^[1-7]$/.test(s)) return +s;
   const i = ['lun','mar','mie','jue','vie','sab','dom'].indexOf(s.slice(0, 3)); return i >= 0 ? i + 1 : null;
 }
+// Convierte texto libre de frecuencia (archivos viejos) a uno de los 5 valores fijos; si no se reconoce, queda sin frecuencia
+// para que el supervisor la asigne a mano, en vez de guardar un texto que ya no se puede usar para calcular cumplimiento.
+function normFrecuencia(v){
+  const s = norm(v); if(!s) return null;
+  if(s.includes('diari')) return 'diario';
+  if(s.includes('varios')) return 'varios_dias_semana';
+  if(s.includes('quince') || s.includes('15')) return 'quincenal';
+  if(s.includes('mensual') || s.includes('mes')) return 'mensual';
+  if(s.includes('semanal') || s.includes('semana')) return 'semanal';
+  return null;
+}
 const parseForma = v => { const s = norm(v); return s.startsWith('cred') ? 'credito' : (s.startsWith('tran') || s.startsWith('dep') || s.includes('banco')) ? 'transferencia' : 'efectivo'; };
 const parseTipoV = v => { const s = norm(v); return s.startsWith('tie') || s.startsWith('mos') ? 'tienda' : s ? 'domicilio' : ''; };
 
@@ -2449,9 +2545,10 @@ function imPrepClientes(){
     const o = {direccion_corta:dir, nombre:nom || dir};
     const set = (k, v) => { if(I.map[k] != null) o[k] = v; };
     set('telefono', imCol(f,'telefono') || null); set('direccion_completa', imCol(f,'direccion_completa') || null); set('zona', imCol(f,'zona') || null);
-    set('frecuencia', imCol(f,'frecuencia') || null); set('notas', imCol(f,'notas') || null);
+    set('notas', imCol(f,'notas') || null);
+    if(I.map.frecuencia != null) o.frecuencia = normFrecuencia(imCol(f,'frecuencia'));
     if(I.map.estado != null) o.estado = imCol(f,'estado') || 'activo';
-    if(I.map.dia_semana != null) o.dia_semana = parseDia(imCol(f,'dia_semana'));
+    if(I.map.dia_semana != null){ const d = parseDia(imCol(f,'dia_semana')); o.dia_semana = d; o.dias_semana = d ? [d] : []; }
     if(I.map.ruta != null){ const rn = norm(imCol(f,'ruta')); const r = S.rutas.find(x => norm(x.nombre) === rn); o.ruta_id = r ? r.id : null; }
     if(I.map.garrafones_prestados != null) o.garrafones_prestados = Math.max(0, Math.round(numImp(imCol(f,'garrafones_prestados'))));
     if(I.map.ultima_compra != null) o.ultima_compra = parseFecha(imCol(f,'ultima_compra'));
